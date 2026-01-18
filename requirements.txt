@@ -1,0 +1,14 @@
+sounddevice==0.4.6
+numpy==1.26.4
+scipy==1.12.0
+pynput==1.7.6
+groq>=1.0.0
+pystray==0.19.5
+Pillow==10.2.0
+pyperclip==1.8.2
+plyer==2.1.0
+
+# macOS specific
+pyobjc-framework-Cocoa==10.1
+pyobjc-framework-AVFoundation==10.1
+pyobjc-framework-ApplicationServices==10.1

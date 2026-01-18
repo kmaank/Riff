@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+!Riff.spec
+.DS_Store
+*.log
+venv/
+.env
+.idea/
+.vscode/
