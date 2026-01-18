@@ -4,6 +4,8 @@ import time
 import os
 import sys
 import logging
+import json
+from datetime import datetime
 from pynput import keyboard
 
 # Setup Logging
@@ -34,12 +36,154 @@ from ui.tray import SystemTray
 from ui.native_onboarding import run_onboarding_native
 from utils.permissions import PermissionManager
 from ui.instructions import show_instructions
+from groq import Groq
+import queue
+import subprocess
+
+class HistoryManager:
+    def __init__(self):
+        self.history_dir = os.path.expanduser("~/Library/Application Support/Riff")
+        self.history_file = os.path.join(self.history_dir, "history.json")
+        self._ensure_file()
+
+    def _ensure_file(self):
+        if not os.path.exists(self.history_dir):
+            os.makedirs(self.history_dir, exist_ok=True)
+        if not os.path.exists(self.history_file):
+            with open(self.history_file, 'w') as f:
+                json.dump([], f)
+
+    def add_entry(self, original, refined, style):
+        try:
+            entry = {
+                "timestamp": datetime.now().isoformat(),
+                "original": original,
+                "refined": refined,
+                "style": style
+            }
+            
+            history = []
+            if os.path.exists(self.history_file):
+                try:
+                    with open(self.history_file, 'r') as f:
+                        history = json.load(f)
+                except json.JSONDecodeError:
+                    history = []
+            
+            history.insert(0, entry)
+            history = history[:50]
+            
+            with open(self.history_file, 'w') as f:
+                json.dump(history, f, indent=2)
+                
+            logging.info(f"History entry added: {style}")
+        except Exception as e:
+            logging.error(f"Failed to save history: {e}")
+
+class ProcessingThread(threading.Thread):
+    def __init__(self, audio_queue, config_manager, status_callback, notification_callback):
+        super().__init__(daemon=True)
+        self.audio_queue = audio_queue
+        self.config_manager = config_manager
+        self.status_callback = status_callback
+        self.notification_callback = notification_callback
+        self.groq_client = Groq(api_key=config_manager.get_api_key())
+        self.history_manager = HistoryManager()
+
+    def run(self):
+        logging.info("Processing thread started")
+        while True:
+            audio_path = self.audio_queue.get()
+            if audio_path is None:
+                break
+
+            try:
+                self.status_callback("processing")
+                
+                # 1. Transcribe
+                logging.info(f"Transcribing {audio_path}...")
+                with open(audio_path, "rb") as file:
+                    transcription = self.groq_client.audio.transcriptions.create(
+                        file=(audio_path, file.read()),
+                        model="whisper-large-v3",
+                        response_format="json",
+                        language="en",
+                        temperature=0.0
+                    )
+                raw_text = transcription.text
+                logging.info(f"Raw transcription: {raw_text}")
+
+                # 2. Get Context & Style
+                context = "" # self.get_active_context()
+                style = self.config_manager.get_style()
+                
+                # 3. Refine
+                logging.info(f"Refining with style '{style}'...")
+                refined_text = self.refine_text(raw_text, style, context)
+                logging.info(f"Refined text: {refined_text}")
+
+                # 4. Save History
+                self.history_manager.add_entry(raw_text, refined_text, style)
+
+                # 5. Type
+                self.type_text(refined_text)
+                
+                # 6. Notify
+                self.notification_callback("Riff Complete", f"Converted ({style})")
+
+            except Exception as e:
+                logging.error(f"Processing failed: {e}")
+                self.notification_callback("Error", str(e))
+            finally:
+                self.status_callback("idle")
+                try:
+                    os.remove(audio_path)
+                except OSError:
+                    pass
+                self.audio_queue.task_done()
+
+    def refine_text(self, text, style, context):
+        system_prompt = self.config_manager.get_prompt(style)
+        try:
+            chat_completion = self.groq_client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Context: {context}\nInput: {text}"}
+                ],
+                model="llama3-8b-8192", 
+            )
+            return chat_completion.choices[0].message.content
+        except Exception as e:
+            logging.error(f"Refinement failed: {e}")
+            return text 
+
+    def type_text(self, text):
+        script = f'''
+        tell application "System Events"
+            keystroke "{text}"
+        end tell
+        '''
+        try:
+            subprocess.run(["osascript", "-e", script], check=True)
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Typing failed: {e}")
 
 class RiffApp:
     def __init__(self):
         logging.info("Initializing RiffApp")
         self.config = ConfigManager()
         self.permission_manager = PermissionManager()
+        
+        # Initialize Audio Queue and Processing Thread
+        self.audio_queue = queue.Queue()
+        self.processing_thread = ProcessingThread(
+            self.audio_queue, 
+            self.config, 
+            self.update_tray_status, 
+            self.show_notification
+        )
+        self.processing_thread.start()
+        
         self.tray = SystemTray(
             on_settings=self.open_settings, 
             on_quit=self.quit,
@@ -70,6 +214,15 @@ class RiffApp:
         self.listener = None
         self.is_latched = False
         logging.info("Initialization Complete")
+
+    def update_tray_status(self, status):
+        if self.tray:
+            self.tray.set_state(status)
+
+    def show_notification(self, title, message):
+        if self.tray:
+            self.tray.show_notification(title, message)
+
 
     def start(self):
         print("EchoFlow Starting...")
@@ -198,76 +351,47 @@ class RiffApp:
         import tempfile
         filename = os.path.join(tempfile.gettempdir(), "echoflow_recording.wav")
         
+        filename = os.path.join(tempfile.gettempdir(), f"echoflow_recording_{time.time()}.wav")
+        
         try:
-            # 1. Stop Recording (safe to call multiple times)
             self.recorder.stop_recording(filename)
-            
-            if not os.path.exists(filename):
+            if os.path.exists(filename) and os.path.getsize(filename) > 0:
+                self.audio_queue.put(filename)
+            else:
+                logging.warning("No audio recorded or file is empty.")
                 self.tray.set_state("idle")
-                self.is_processing = False
-                return
-
-            if not self.transcriber or not self.refiner:
-                 self.tray.show_notification("Error", "API Key missing. Check config.")
-                 self.tray.set_state("error")
-                 time.sleep(2)
-                 self.tray.set_state("idle")
-                 self.is_processing = False
-                 return
-
-            # Determine Context
-            app_name = self.context_detector.get_active_app_name()
-            print(f"Active App: {app_name}")
-            logging.info(f"Active App: {app_name}")
-            
-            suggested_style = self.context_detector.suggest_style(app_name, self.config.config)
-            print(f"Suggested Style: {suggested_style}")
-
-            # 2. Transcribe
-            print("--> Transcribing...")
-            raw_text = self.transcriber.transcribe_file(filename)
-            print(f"Raw: {raw_text}")
-            logging.info(f"Transcription: {raw_text}")
-            
-            if not raw_text:
-                self.tray.set_state("idle")
-                self.is_processing = False
-                return
-
-            # 3. Refine
-            print("--> Refining...")
-            refined_text = self.refiner.refine(raw_text, style=suggested_style)
-            print(f"Refined: {refined_text}")
-            
-            # 4. Inject
-            print("--> Injecting...")
-            self.injector.inject(refined_text)
-            logging.info("Injection complete")
-            
-            self.tray.set_state("idle")
-            
+                if os.path.exists(filename):
+                    os.remove(filename)
         except Exception as e:
-            print(f"Error: {e}")
-            logging.error(f"Processing Error: {e}", exc_info=True)
-            self.tray.set_state("error")
-            self.tray.show_notification("Error", str(e))
-            time.sleep(2)
+            logging.error(f"Error stopping recording or queuing audio: {e}", exc_info=True)
+            self.tray.show_notification("Error", f"Recording failed: {e}")
             self.tray.set_state("idle")
-        finally:
-            self.is_processing = False
+            if os.path.exists(filename):
+                os.remove(filename)
 
     def open_settings(self):
-        # Placeholder for settings (opens config file)
         import subprocess
         try:
-            if sys.platform == "darwin":
-                subprocess.call(["open", self.config.config_path])
-            elif sys.platform == "win32":
-                os.startfile(self.config.config_path)
+            # Determine Path
+            if getattr(sys, 'frozen', False):
+                # In .app bundle: bundle_dir/RiffControlCenter.app
+                # PyInstaller unpacks datas to sys._MEIPASS
+                base_dir = sys._MEIPASS
+                app_path = os.path.join(base_dir, "RiffControlCenter.app")
             else:
-                subprocess.call(["xdg-open", self.config.config_path])
+                # Dev: config_ui/build/RiffControlCenter.app
+                app_path = os.path.join(os.getcwd(), "config_ui", "build", "RiffControlCenter.app")
+            
+            logging.info(f"Launching settings app at: {app_path}")
+            if os.path.exists(app_path):
+                subprocess.call(["open", app_path])
+            else:
+                logging.error(f"Settings app not found at {app_path}")
+                # Fallback to file open
+                subprocess.call(["open", self.config.config_path])
+                
         except Exception as e:
-              print(f"Could not open config: {e}")
+            logging.error(f"Could not open settings: {e}")
 
     def open_instructions(self):
         # Run instructions in a thread to avoid blocking tray
@@ -281,6 +405,8 @@ class RiffApp:
                 self.listener.stop()
             except: 
                 pass
+        self.audio_queue.put(None) # Signal processing thread to stop
+        self.processing_thread.join(timeout=5) # Wait for thread to finish
         self.tray.stop()
         sys.exit(0)
 

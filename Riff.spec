@@ -10,9 +10,12 @@ hiddenimports += collect_submodules('ui')
 tmp_ret = collect_all('pystray')
 datas += tmp_ret[0]; binaries += tmp_ret[1];
 
-# Force include the source file and assets
-datas += [('ui/native_onboarding.py', 'ui'), ('assets', 'assets')]
-
+# Force include the source file, assets, and Control Center
+datas += [
+    ('ui/native_onboarding.py', 'ui'),
+    ('assets', 'assets'),
+    ('config_ui/build/RiffControlCenter.app', 'RiffControlCenter.app')
+]
 a = Analysis(
     ['main.py'],
     pathex=[os.getcwd()],

@@ -1,0 +1,72 @@
+import SwiftUI
+
+struct ContentView: View {
+    @EnvironmentObject var settings: SettingsManager
+    @State private var selectedTab = "style"
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // Sidebar
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Riff")
+                    .font(.largeTitle)
+                    .fontWeight(.bold)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [.orange, .yellow],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .padding(.bottom, 20)
+
+                SidebarButton(icon: "sparkles", title: "Style", id: "style", selection: $selectedTab)
+                SidebarButton(icon: "keyboard", title: "Keys", id: "keys", selection: $selectedTab)
+                SidebarButton(icon: "clock.arrow.circlepath", title: "History", id: "history", selection: $selectedTab)
+                SidebarButton(icon: "book.fill", title: "How to", id: "help", selection: $selectedTab)
+
+                Spacer()
+            }
+            .padding()
+            .frame(width: 180)
+            .background(Color(nsColor: .controlBackgroundColor))
+
+            // Main Content
+            VStack {
+                switch selectedTab {
+                case "style": StyleView()
+                case "keys": KeysView()
+                case "history": HistoryView()
+                case "help": HelpView()
+                default: StyleView()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(nsColor: .windowBackgroundColor))
+        }
+    }
+}
+
+struct SidebarButton: View {
+    let icon: String
+    let title: String
+    let id: String
+    @Binding var selection: String
+
+    var body: some View {
+        Button(action: { selection = id }) {
+            HStack {
+                Image(systemName: icon)
+                    .frame(width: 20)
+                Text(title)
+                Spacer()
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 10)
+            .background(selection == id ? Color.accentColor.opacity(0.1) : Color.clear)
+            .foregroundStyle(selection == id ? Color.accentColor : Color.primary)
+            .cornerRadius(8)
+        }
+        .buttonStyle(.plain)
+    }
+}
