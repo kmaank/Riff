@@ -1,17 +1,24 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_submodules
+import os
 
 datas = []
 binaries = []
 hiddenimports = ['pystray', 'PIL', 'pynput', 'groq', 'AVFoundation', 'ApplicationServices', 'objc']
+hiddenimports += collect_submodules('ui')
+
 tmp_ret = collect_all('pystray')
 datas += tmp_ret[0]; binaries += tmp_ret[1];
+
+# Force include the source file just in case
+datas += [('ui/native_onboarding.py', 'ui')]
+
 a = Analysis(
     ['main.py'],
-    pathex=[],
+    pathex=[os.getcwd()],
     binaries=[],
-    datas=[],
-    hiddenimports=['pystray', 'PIL.Image', 'PIL.ImageDraw', 'pystray._util'],
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

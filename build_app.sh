@@ -18,7 +18,7 @@ export MACOSX_DEPLOYMENT_TARGET=11.0
 
 echo "📦 Building Riff.app..."
 
-python3 -m PyInstaller Riff.spec
+python3 -m PyInstaller --noconfirm Riff.spec
 
 echo "✅ Build Complete!"
 echo "🚀 App location: dist/Riff.app"

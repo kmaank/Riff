@@ -22,7 +22,8 @@ def show_dialog(message, title="Riff", default_answer=None, buttons=["OK"], defa
     If default_answer is provided, it shows an input field.
     Returns the text entered (if any) or the button clicked.
     """
-    cmd = f'display dialog "{message}" with title "{title}" buttons {{{", ".join([f"\"{b}\"" for b in buttons])}}} default button "{default_button}" with icon {icon}'
+    buttons_str = ", ".join([f'"{b}"' for b in buttons])
+    cmd = f'display dialog "{message}" with title "{title}" buttons {{{buttons_str}}} default button "{default_button}" with icon {icon}'
     
     if default_answer is not None:
         cmd += f' default answer "{default_answer}"'
