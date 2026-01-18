@@ -48,6 +48,17 @@ struct HistoryRow: View {
                 Text(formatDate(entry.timestamp))
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+                
+                Button(action: {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(entry.refined, forType: .string)
+                }) {
+                    Image(systemName: "doc.on.doc")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Copy to clipboard")
             }
             
             Text(entry.refined)

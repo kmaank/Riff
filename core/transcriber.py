@@ -11,7 +11,7 @@ class Transcriber:
         if not api_key:
             raise TranscriptionError("API key is required.")
         try:
-            self.client = Groq(api_key=api_key)
+            self.client = Groq(api_key=api_key, timeout=20.0)
         except Exception as e:
             raise TranscriptionError(f"Failed to initialize Groq client: {e}")
         
@@ -25,11 +25,11 @@ class Transcriber:
                 transcription = self.client.audio.transcriptions.create(
                     file=(filepath, file.read()),
                     model="whisper-large-v3",
-                    response_format="text"
+                    response_format="json"
                 )
             
             print("[Transcription complete]")
-            text = transcription.strip()
+            text = transcription.text.strip()
             
             # Filter Hallucinations
             # Whisper known to output these on silence

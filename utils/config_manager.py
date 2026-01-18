@@ -17,7 +17,7 @@ class ConfigManager:
             "max_recording_seconds": 60
         },
         "style": {
-            "active": "clean"
+            "active_style": "casual"
         },
         "api": {
             "api_key": "",
@@ -69,6 +69,12 @@ class ConfigManager:
         else:
             self.config = self.DEFAULT_CONFIG.copy()
             self.save()
+        
+        # Migration: Check for deprecated models and update
+        if self.config.get("api", {}).get("llm_model") == "llama3-8b-8192":
+            print("[Config] Migrating deprecated model llama3-8b-8192 to llama-3.3-70b-versatile")
+            self.set("api.llm_model", "llama-3.3-70b-versatile")
+            
         return self.config
 
     def save(self, config: dict = None):
@@ -106,6 +112,70 @@ class ConfigManager:
         
         target[keys[-1]] = value
         self.save()
+
+        self.save()
+        return self.config
+
+    def get_api_key(self):
+        return self.get("api.api_key")
+
+    def get_style(self):
+        val = self.get("style.active_style", "casual")
+        print(f"[DEBUG] get_style called. Found: {val}")
+        return val
+
+    def get_prompt(self, style):
+        # 1. Check for user override in config.json
+        # The key is style.options.<style_name>
+        config_override = self.get(f"style.options.{style}")
+        if config_override:
+            return config_override
+
+        # 2. Hardcoded defaults
+        prompts = {
+            "casual": (
+                "You are a transcriber who captures the raw authenticity of speech. "
+                "Output the text exactly as spoken, preserving slang, emotions, and tone. "
+                "Do NOT censor abusive or aggressive language. "
+                "Do NOT remove filler words if they add to the emotion. "
+                "Simply transcribe the 'feelings' and words of the person as is."
+            ),
+            "formal": (
+                "You are a professional business editor. "
+                "Your task is to transform the spoken input into clean, clear, and grammatically correct business-formal text. "
+                "Remove all filler words (umm, uh, like), repetitions, and stuttering. "
+                "Remove any abusive, aggressive, or slang language, replacing it with polite professional equivalents if necessary, or omitting it if irrelevant. "
+                "Ensure the tone is respectful, concise, and ready for a professional email or Slack message."
+            ),
+            # Aliases
+            "professional": (
+                "You are a professional business editor. "
+                "Your task is to transform the spoken input into clean, clear, and grammatically correct business-formal text. "
+                "Remove all filler words (umm, uh, like), repetitions, and stuttering. "
+                "Remove any abusive, aggressive, or slang language, replacing it with polite professional equivalents if necessary, or omitting it if irrelevant. "
+                "Ensure the tone is respectful, concise, and ready for a professional email or Slack message."
+            ),
+            "clean": (
+                 "You are a dictation editor. Clean the following transcript. "
+                 "REMOVE: filler words (um, uh, like, you know, basicially), repetitions, and hesitations. "
+                 "FIX: grammar, punctuation, and capitalization. "
+                 "KEEP: the original tone, meaning, and non-filler words. "
+                 "Do NOT act as a chatbot. Do NOT add intros/outros. Output ONLY the refined text."
+            ),
+            # Extras
+            "code": "You are a coding assistant. Format the text as code comments or proper variable names (snake_case) depending on context.",
+            "pirate": "You are a pirate. Arrr! Speak like one."
+        }
+        prompt = prompts.get(style, prompts["casual"])
+        
+        # Universal strict boundary to prevent "Here is the transcript" chatter
+        strict_instruction = (
+            "\n\nCRITICAL: Output ONLY the refined text. "
+            "Do NOT include quotes, 'Here is the transcript:', or any explanations. "
+            "Just the text."
+        )
+        
+        return prompt + strict_instruction
 
 def main():
     config = ConfigManager()

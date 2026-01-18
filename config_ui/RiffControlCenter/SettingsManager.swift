@@ -45,7 +45,7 @@ class SettingsManager: ObservableObject {
         // Default Config
         self.config = Config(
             audio: AudioConfig(sample_rate: 16000, silence_threshold_ms: 600),
-            api: ApiConfig(api_key: "", llm_model: "llama3-8b-8192"),
+            api: ApiConfig(api_key: "", llm_model: "llama-3.3-70b-versatile"),
             hotkey: HotkeyConfig(combination: "f8"),
             style: StyleConfig(active_style: "casual")
         )

@@ -2,6 +2,7 @@
 import threading
 import time
 import os
+import tempfile
 import sys
 import logging
 import json
@@ -13,14 +14,19 @@ try:
     log_file = os.path.expanduser("~/Documents/Riff/debug.log")
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
     logging.basicConfig(
-        filename=log_file,
-        level=logging.DEBUG,
-        format='%(asctime)s - %(levelname)s - %(message)s'
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler(sys.stdout)
+        ]
     )
 except Exception as e:
-    # Fallback to console if file logging fails
-    logging.basicConfig(level=logging.DEBUG)
     print(f"Failed to setup file logging: {e}")
+
+# Silence noisy libraries
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 logging.info("----------------------------------------------------------------")
 logging.info("Riff Logging Started")
@@ -81,14 +87,20 @@ class HistoryManager:
             logging.error(f"Failed to save history: {e}")
 
 class ProcessingThread(threading.Thread):
-    def __init__(self, audio_queue, config_manager, status_callback, notification_callback):
+    def __init__(self, audio_queue, config_manager, status_callback, notification_callback, refiner=None, transcriber=None):
         super().__init__(daemon=True)
         self.audio_queue = audio_queue
         self.config_manager = config_manager
         self.status_callback = status_callback
         self.notification_callback = notification_callback
-        self.groq_client = Groq(api_key=config_manager.get_api_key())
+        self.transcriber = transcriber
+        self.refiner = refiner
         self.history_manager = HistoryManager()
+        # Fallback if component not passed (should not happen in correct init)
+        if not self.transcriber:
+             self.transcriber = Transcriber(config_manager.get_api_key())
+        if not self.refiner:
+             self.refiner = Refiner(config_manager.get_api_key())
 
     def run(self):
         logging.info("Processing thread started")
@@ -100,27 +112,43 @@ class ProcessingThread(threading.Thread):
             try:
                 self.status_callback("processing")
                 
-                # 1. Transcribe
+                # Reload config to get latest style changes from UI
+                self.config_manager.load()
+                
+                # 1. Transcribe with Retry
                 logging.info(f"Transcribing {audio_path}...")
-                with open(audio_path, "rb") as file:
-                    transcription = self.groq_client.audio.transcriptions.create(
-                        file=(audio_path, file.read()),
-                        model="whisper-large-v3",
-                        response_format="json",
-                        language="en",
-                        temperature=0.0
-                    )
-                raw_text = transcription.text
+                raw_text = None
+                for attempt in range(3):
+                    try:
+                        raw_text = self.transcriber.transcribe_file(audio_path)
+                        break
+                    except Exception as e:
+                        logging.warning(f"Transcription attempt {attempt + 1} failed: {e}")
+                        if attempt < 2:
+                            self.notification_callback("Processing...", f"Retrying transcription ({attempt + 2}/3)...")
+                            time.sleep(1) # Short backoff
+                        else:
+                            raise e # Re-raise if all fail
+                            
                 logging.info(f"Raw transcription: {raw_text}")
 
                 # 2. Get Context & Style
                 context = "" # self.get_active_context()
                 style = self.config_manager.get_style()
                 
-                # 3. Refine
+                # 3. Refine with Fallback
                 logging.info(f"Refining with style '{style}'...")
-                refined_text = self.refine_text(raw_text, style, context)
-                logging.info(f"Refined text: {refined_text}")
+                refined_text = raw_text
+                used_fallback = False
+                
+                try:
+                    refined_text = self.refine_text(raw_text, style, context)
+                    logging.info(f"Refined text: {refined_text}")
+                except Exception as e:
+                    logging.error(f"Refinement failed, falling back to raw text: {e}")
+                    refined_text = raw_text
+                    used_fallback = True
+                    self.notification_callback("Refinement Failed", "Using raw transcript")
 
                 # 4. Save History
                 self.history_manager.add_entry(raw_text, refined_text, style)
@@ -129,7 +157,10 @@ class ProcessingThread(threading.Thread):
                 self.type_text(refined_text)
                 
                 # 6. Notify
-                self.notification_callback("Riff Complete", f"Converted ({style})")
+                if used_fallback:
+                     self.notification_callback("Riff Complete", "Converted (Raw Fallback)")
+                else:
+                     self.notification_callback("Riff Complete", f"Converted ({style})")
 
             except Exception as e:
                 logging.error(f"Processing failed: {e}")
@@ -143,18 +174,24 @@ class ProcessingThread(threading.Thread):
                 self.audio_queue.task_done()
 
     def refine_text(self, text, style, context):
-        system_prompt = self.config_manager.get_prompt(style)
         try:
-            chat_completion = self.groq_client.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Context: {context}\nInput: {text}"}
-                ],
-                model="llama3-8b-8192", 
-            )
-            return chat_completion.choices[0].message.content
+            # Get prompt from config (handles overrides and defaults)
+            system_prompt = self.config_manager.get_prompt(style)
+            
+            logging.info(f"Refining with style: {style}")
+            print(f"[DEBUG] Refining with style: {style}")
+            print(f"[DEBUG] Using Prompt: {system_prompt[:50]}...")
+
+            # Use the dedicated Refiner component
+            if self.refiner:
+                 return self.refiner.refine(text, style, prompt=system_prompt)
+            else:
+                 logging.error("Refiner component not initialized")
+                 return text
+
         except Exception as e:
             logging.error(f"Refinement failed: {e}")
+            print(f"[ERROR] Refinement failed: {e}")
             return text 
 
     def type_text(self, text):
@@ -174,16 +211,9 @@ class RiffApp:
         self.config = ConfigManager()
         self.permission_manager = PermissionManager()
         
-        # Initialize Audio Queue and Processing Thread
-        self.audio_queue = queue.Queue()
-        self.processing_thread = ProcessingThread(
-            self.audio_queue, 
-            self.config, 
-            self.update_tray_status, 
-            self.show_notification
-        )
-        self.processing_thread.start()
-        
+        # Load API Key
+        self.api_key = self.config.get("api.api_key")
+
         self.tray = SystemTray(
             on_settings=self.open_settings, 
             on_quit=self.quit,
@@ -193,19 +223,30 @@ class RiffApp:
             permission_manager=self.permission_manager
         )
         
-        # Load API Key
-        self.api_key = self.config.get("api.api_key")
         if not self.api_key:
             self.tray.show_notification("EchoFlow", "Please set your Groq API Key in config.json")
             logging.warning("API Key missing")
+
+        self.transcriber = Transcriber(self.api_key) if self.api_key else None
+        self.refiner = Refiner(self.api_key, model=self.config.get("api.llm_model")) if self.api_key else None
+        
+        # Initialize Audio Queue and Processing Thread
+        self.audio_queue = queue.Queue()
+        self.processing_thread = ProcessingThread(
+            self.audio_queue, 
+            self.config, 
+            self.update_tray_status, 
+            self.show_notification,
+            refiner=self.refiner,
+            transcriber=self.transcriber
+        )
+        self.processing_thread.start()
 
         # Initialize Components
         self.recorder = AudioRecorder(
             sample_rate=self.config.get("audio.sample_rate", 16000),
             silence_threshold_ms=self.config.get("audio.silence_threshold_ms", 600)
         )
-        self.transcriber = Transcriber(self.api_key) if self.api_key else None
-        self.refiner = Refiner(self.api_key, model=self.config.get("api.llm_model")) if self.api_key else None
         self.injector = TextInjector()
         self.context_detector = ContextDetector()
         
@@ -216,6 +257,9 @@ class RiffApp:
         logging.info("Initialization Complete")
 
     def update_tray_status(self, status):
+        if status == "idle":
+            self.is_processing = False
+            
         if self.tray:
             self.tray.set_state(status)
 
@@ -332,6 +376,26 @@ class RiffApp:
         if not self.recorder.recording and not self.is_processing:
             logging.info("Manual Start Triggered")
             self.tray.set_state("recording")
+
+    def process_audio(self):
+        """Stop recording, save to temp file, and queue for processing."""
+        logging.info("Processing Audio...")
+        try:
+            # Create a temp file path
+            temp_dir = tempfile.gettempdir()
+            filename = f"echoflow_recording_{time.time()}.wav"
+            filepath = os.path.join(temp_dir, filename)
+            
+            # Stop recording and save
+            self.recorder.stop_recording(filename=filepath)
+            
+            # Add to queue for processing thread
+            self.audio_queue.put(filepath)
+            
+        except Exception as e:
+            logging.error(f"Error processing audio: {e}")
+            self.tray.set_state("error")
+            self.tray.show_notification("Error", "Failed to process audio")
             self.recorder.start_recording()
 
     def stop_recording_manual(self):
@@ -341,6 +405,8 @@ class RiffApp:
             self.tray.set_state("processing")
             threading.Thread(target=self.process_audio).start()
 
+
+
     def process_audio(self):
         # Prevent double processing (e.g. key release + auto-stop race)
         if self.is_processing:
@@ -349,7 +415,6 @@ class RiffApp:
         self.is_processing = True
         logging.info("Processing Audio...")
         import tempfile
-        filename = os.path.join(tempfile.gettempdir(), "echoflow_recording.wav")
         
         filename = os.path.join(tempfile.gettempdir(), f"echoflow_recording_{time.time()}.wav")
         
@@ -360,12 +425,14 @@ class RiffApp:
             else:
                 logging.warning("No audio recorded or file is empty.")
                 self.tray.set_state("idle")
+                self.is_processing = False
                 if os.path.exists(filename):
                     os.remove(filename)
         except Exception as e:
             logging.error(f"Error stopping recording or queuing audio: {e}", exc_info=True)
             self.tray.show_notification("Error", f"Recording failed: {e}")
             self.tray.set_state("idle")
+            self.is_processing = False
             if os.path.exists(filename):
                 os.remove(filename)
 

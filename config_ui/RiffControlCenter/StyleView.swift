@@ -3,7 +3,7 @@ import SwiftUI
 struct StyleView: View {
     @EnvironmentObject var settings: SettingsManager
     
-    let styles = ["formal", "casual", "code", "pirate", "critical", "exec", "sales", "therapy", "tweet"]
+    let styles = ["formal", "casual"]
     
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {

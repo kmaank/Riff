@@ -29,11 +29,12 @@ Output ONLY the refined text."""
         self.client = Groq(api_key=api_key)
         self.model = model
 
-    def refine(self, text: str, style: str = "clean") -> str:
+    def refine(self, text: str, style: str = "clean", prompt: str = None) -> str:
         if not text:
             return ""
             
-        system_prompt = self.STYLES.get(style, self.STYLES["clean"])
+        # Use provided prompt if available, otherwise fallback to internal dictionary (mostly for backward compatibility/standalone usage)
+        system_prompt = prompt if prompt else self.STYLES.get(style, self.STYLES["clean"])
         
         try:
             chat_completion = self.client.chat.completions.create(
