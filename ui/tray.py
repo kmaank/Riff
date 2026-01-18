@@ -3,6 +3,10 @@ import pystray
 from PIL import Image, ImageDraw
 import threading
 import time
+import os
+import sys
+import logging
+from pystray import Icon, Menu, MenuItem
 from utils.permissions import PermissionManager
 
 class SystemTray:
@@ -17,78 +21,52 @@ class SystemTray:
         self.icons = self._create_icons()
         self.current_state = "idle"
 
-    # ... (icons code)
+    def load_icon(self, icon_name):
+        """Loads an icon from the assets folder."""
+        try:
+            # Determine path (handle dev vs frozen app)
+            if getattr(sys, 'frozen', False):
+                base_path = sys._MEIPASS
+            else:
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                # ui/tray.py -> ../assets
+                base_path = os.path.dirname(current_dir)
+            
+            icon_path = os.path.join(base_path, "assets", icon_name)
+            return Image.open(icon_path)
+        except Exception as e:
+            logging.error(f"Failed to load icon {icon_name}: {e}")
+            # Fallback to creating a simple colored square if image fails
+            return self.create_fallback_icon("red" if "recording" in icon_name else "green" if "processing" in icon_name else "white")
+
+    def create_fallback_icon(self, color):
+        """Fallback generator if assets are missing."""
+        width = 64
+        height = 64
+        image = Image.new('RGB', (width, height), color)
+        dc = ImageDraw.Draw(image)
+        dc.rectangle((0, 0, width, height), fill=color)
+        return image
+
+    def _create_icons(self):
+        # Preload icons
+        return {
+            "idle": self.load_icon("tray_idle.png"),
+            "recording": self.load_icon("tray_recording.png"),
+            "processing": self.load_icon("tray_processing.png")
+        }
 
     def _create_permissions_menu(self):
         status = self.permission_manager.get_all_status()
         
         mic_mark = "✓" if status.get("microphone") else "✗"
         acc_mark = "✓" if status.get("accessibility") else "✗"
-        # Automation 
         auto_mark = "?" 
         
         return pystray.Menu(
             pystray.MenuItem(f"{mic_mark} Microphone (Open Settings)", self._req_mic),
             pystray.MenuItem(f"{acc_mark} Accessibility (Open Settings)", self._req_acc),
             pystray.MenuItem(f"Automation (Open Settings)", self._req_auto)
-        )
-
-    # ... (req methods call existing manager methods which now open settings)
-
-    def _create_menu(self):
-        # Dynamic label based on state
-        state_label = f"Status: {self.current_state.title()}"
-        
-        return pystray.Menu(
-            pystray.MenuItem(state_label, None, enabled=False),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Start Recording", self._on_record_click, enabled=lambda item: self.current_state == "idle"),
-            pystray.MenuItem("Stop Recording", self._on_stop_click, enabled=lambda item: self.current_state == "recording"),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("How to Use (Instructions)", self._on_instructions_click),
-            pystray.MenuItem("Permissions ▸", self._create_permissions_menu()),
-            pystray.MenuItem("Settings", self.on_settings),
-            pystray.MenuItem("Quit", self._quit)
-        )
-
-    def _on_instructions_click(self, icon, item):
-        if self.on_instructions:
-            self.on_instructions()
-        
-    def _create_icons(self):
-        # Create simple colored circle icons programmatically
-        states = {
-            "idle": (128, 128, 128),      # Gray
-            "recording": (255, 0, 0),     # Red
-            "processing": (255, 255, 0),  # Yellow
-            "error": (255, 0, 255)        # Magenta
-        }
-        
-        icons = {}
-        size = 64
-        for name, color in states.items():
-            image = Image.new('RGBA', (size, size), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(image)
-            # Draw circle
-            draw.ellipse((8, 8, size-8, size-8), fill=color)
-            icons[name] = image
-            
-        return icons
-
-    def _create_permissions_menu(self):
-        status = self.permission_manager.get_all_status()
-        
-        mic_mark = "✓" if status.get("microphone") else "✗"
-        acc_mark = "✓" if status.get("accessibility") else "✗"
-        # Automation is hard to check accurately, let's just show it as a request button if false, or maybe just a list
-        # Since we defaulted automation to False/None, let's just use "Request" if we can't confirm.
-        # But for checklist visuals:
-        auto_mark = "?" # or ✗
-        
-        return pystray.Menu(
-            pystray.MenuItem(f"{mic_mark} Microphone", self._req_mic),
-            pystray.MenuItem(f"{acc_mark} Accessibility", self._req_acc),
-            pystray.MenuItem(f"Request Automation", self._req_auto)
         )
 
     def _req_mic(self, icon, item):
@@ -113,10 +91,15 @@ class SystemTray:
             pystray.MenuItem("Start Recording", self._on_record_click, enabled=lambda item: self.current_state == "idle"),
             pystray.MenuItem("Stop Recording", self._on_stop_click, enabled=lambda item: self.current_state == "recording"),
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem("How to Use (Instructions)", self._on_instructions_click),
             pystray.MenuItem("Permissions ▸", self._create_permissions_menu()),
             pystray.MenuItem("Settings", self.on_settings),
             pystray.MenuItem("Quit", self._quit)
         )
+
+    def _on_instructions_click(self, icon, item):
+        if self.on_instructions:
+            self.on_instructions()
     
     def update_menu(self):
         if self.icon:
@@ -168,23 +151,17 @@ class SystemTray:
 def main():
     def on_settings():
         print("Settings clicked")
-        
     def on_quit():
         print("Quit clicked")
-    
     def on_record():
         print("Record clicked")
-        tray.set_state("recording")
-
     def on_stop():
         print("Stop clicked")
-        tray.set_state("idle")
         
     tray = SystemTray(on_settings, on_quit, on_record, on_stop)
     print("Tray running in background...")
     tray.run_detached()
     
-    # Keep alive until user quits (for this test)
     try:
         while True:
             time.sleep(1)

@@ -10,8 +10,8 @@ hiddenimports += collect_submodules('ui')
 tmp_ret = collect_all('pystray')
 datas += tmp_ret[0]; binaries += tmp_ret[1];
 
-# Force include the source file just in case
-datas += [('ui/native_onboarding.py', 'ui')]
+# Force include the source file and assets
+datas += [('ui/native_onboarding.py', 'ui'), ('assets', 'assets')]
 
 a = Analysis(
     ['main.py'],
@@ -56,7 +56,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='Riff.app',
-    icon=None,
+    icon='assets/AppIcon.icns',
     bundle_identifier='com.riff.app',
     info_plist={
         'NSMicrophoneUsageDescription': 'Riff needs microphone access to listen for your dictation.',

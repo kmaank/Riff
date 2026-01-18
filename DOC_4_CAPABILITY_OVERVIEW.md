@@ -4,6 +4,20 @@
 
 ---
 
+## 📦 Release v1.1.0 (Visual Update)
+**Date:** 2026-01-18
+**Timestamp:** 14:45 IST
+**Status:** Shipped 🎨
+
+### New Capabilities
+*   **Custom Branding:** Application now features the "Riff" logo in the Dock, Finder, and Installers.
+*   **Dynamic Tray Icons:**
+    *   ⚪ **White R:** Idle/Ready.
+    *   🔴 **Red R:** Recording.
+    *   🟢 **Green R:** Processing/Thinking.
+
+---
+
 ## 📦 Release v1.0.0 (Stable)
 **Date:** 2026-01-18
 **Timestamp:** 13:50 IST
