@@ -1,79 +1,90 @@
+import os
+import tempfile
+import webbrowser
+import logging
+from threading import Timer
 
-import tkinter as tk
-from tkinter import ttk
+def get_instructions_html():
+    return """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How to use Riff</title>
+        <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 40px; line-height: 1.6; max_width: 700px; margin: 0 auto; color: #333; }
+            h1 { color: #000; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+            h2 { margin-top: 30px; color: #444; }
+            .key { background: #f0f0f0; padding: 2px 6px; border-radius: 4px; border: 1px solid #ccc; font-family: monospace; font-weight: bold; }
+            .icon-red { color: #e74c3c; }
+            .icon-yellow { color: #f1c40f; }
+            ul { padding-left: 20px; }
+            li { margin-bottom: 8px; }
+            .footer { margin-top: 50px; font-size: 0.9em; color: #888; text-align: center; border-top: 1px solid #eee; padding-top: 20px; }
+        </style>
+    </head>
+    <body>
+        <h1>How to use Riff 🎙️</h1>
 
-class InstructionsWindow:
-    def __init__(self):
-        self.root = tk.Tk()
-        self.root.title("EchoFlow Instructions")
-        self.root.geometry("500x600")
-        self.root.resizable(False, False)
-        self.center_window()
-        self.setup_ui()
-        
-        # Bring to front
-        self.root.lift()
-        self.root.attributes('-topmost', True)
-        self.root.after_idle(self.root.attributes, '-topmost', False)
+        <h2>1. Recording</h2>
+        <ul>
+            <li><strong>Option A:</strong> HOLD <span class="key">Left Control</span> to talk. (Release to stop)</li>
+            <li><strong>Option B:</strong> Click "Start Recording" in the Tray menu.</li>
+            <li><strong>Latch Mode:</strong> Hold <span class="key">Left Shift</span> + <span class="key">Left Control</span> to lock recording on. (Press key again to stop)</li>
+            <li>The tray icon turns <strong class="icon-red">RED 🔴</strong> while recording.</li>
+        </ul>
 
-    def center_window(self):
-        self.root.update_idletasks()
-        width = self.root.winfo_width()
-        height = self.root.winfo_height()
-        x = (self.root.winfo_screenwidth() // 2) - (width // 2)
-        y = (self.root.winfo_screenheight() // 2) - (height // 2)
-        self.root.geometry(f'{width}x{height}+{x}+{y}')
+        <h2>2. Finishing</h2>
+        <ul>
+            <li>Release the hotkey OR click "Stop Recording" in the Tray.</li>
+            <li>The icon turns <strong class="icon-yellow">YELLOW 🟡</strong> while processing.</li>
+            <li>The text will be typed automatically into your active window.</li>
+        </ul>
 
-    def setup_ui(self):
-        # Styles
-        style = ttk.Style()
-        style.configure("Header.TLabel", font=("Helvetica", 18, "bold"))
-        style.configure("SubHeader.TLabel", font=("Helvetica", 14, "bold"))
-        style.configure("Bold.TLabel", font=("Helvetica", 12, "bold"))
-        
-        main_frame = ttk.Frame(self.root, padding="20")
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        <h2>3. Permissions</h2>
+        <p>If it's not working, check the <strong>Tray > Permissions</strong> menu:</p>
+        <ul>
+            <li><strong>Microphone:</strong> Needed to hear your voice.</li>
+            <li><strong>Accessibility:</strong> Needed to detect the hotkey press.</li>
+            <li><strong>Input Monitoring:</strong> Needed to listen for global keyboard events.</li>
+            <li><strong>Automation:</strong> Needed to paste text cleanly.</li>
+        </ul>
+        <p><em>Click any item in the menu to open the corresponding System Settings panel.</em></p>
 
-        # Title
-        ttk.Label(main_frame, text="How to use EchoFlow 🎙️", style="Header.TLabel").pack(pady=(0, 20))
-        
-        # Section 1: Recording
-        ttk.Label(main_frame, text="1. Recording", style="SubHeader.TLabel").pack(anchor=tk.W, pady=(10, 5))
-        ttk.Label(main_frame, text="• Option A: HOLD 'Left Control' to talk.").pack(anchor=tk.W, padx=10)
-        ttk.Label(main_frame, text="• Option B: Click 'Start Recording' in the Tray menu.").pack(anchor=tk.W, padx=10)
-        ttk.Label(main_frame, text="• Latch Mode: Hold 'Left Shift' + 'Left Control' to lock.").pack(anchor=tk.W, padx=10)
-        ttk.Label(main_frame, text="• The icon will turn RED 🔴 while recording.").pack(anchor=tk.W, padx=10)
-        
-        # Section 2: Stopping & Processing
-        ttk.Label(main_frame, text="2. Finishing", style="SubHeader.TLabel").pack(anchor=tk.W, pady=(15, 5))
-        ttk.Label(main_frame, text="• Release the hotkey OR click 'Stop Recording' in Tray.").pack(anchor=tk.W, padx=10)
-        ttk.Label(main_frame, text="• The icon turns YELLOW 🟡 while processing.").pack(anchor=tk.W, padx=10)
-        ttk.Label(main_frame, text="• Text will be typed into your active window.").pack(anchor=tk.W, padx=10)
-        
-        # Section 3: Permissions
-        ttk.Label(main_frame, text="3. Permissions", style="SubHeader.TLabel").pack(anchor=tk.W, pady=(15, 5))
-        ttk.Label(main_frame, text="If it's not working, check the Tray > Permissions menu.").pack(anchor=tk.W, padx=10)
-        ttk.Label(main_frame, text="• Microphone: Needed to hear you.").pack(anchor=tk.W, padx=10)
-        ttk.Label(main_frame, text="• Accessibility: Needed for the hotkey.").pack(anchor=tk.W, padx=10)
-        ttk.Label(main_frame, text="• Automation: Needed to paste text cleanly.").pack(anchor=tk.W, padx=10)
-        ttk.Label(main_frame, text="Click any item in the menu to open System Settings.").pack(anchor=tk.W, padx=10)
-
-        # Close Button
-        ttk.Button(main_frame, text="Got it!", command=self.root.destroy).pack(side=tk.BOTTOM, fill=tk.X, pady=20)
-
-    def run(self):
-        self.root.mainloop()
+        <div class="footer">
+            Riff - Simplicity in Voice
+        </div>
+    </body>
+    </html>
+    """
 
 def show_instructions():
-    # Run in a separate process or ensure it doesn't block if mainloop is tricky
-    # Since specific tkinter usage within existing loops can be complex,
-    # for this helper window, we'll just instantiate and run.
-    # Note: If main thread is blocked by tray, this might need care.
-    # But usually creating a new Tk instance for a transient window is okay-ish if careful,
-    # or better, use multiprocessing if the main app is weird.
-    # Let's try standard instantiation first.
-    window = InstructionsWindow()
-    window.run()
-
-if __name__ == "__main__":
-    show_instructions()
+    """Generates a transient HTML file and opens it in the default browser."""
+    try:
+        # Create a temp file
+        fd, path = tempfile.mkstemp(suffix=".html", prefix="echoflow_help_")
+        
+        with os.fdopen(fd, 'w') as f:
+            f.write(get_instructions_html())
+            
+        logging.info(f"Opening instructions at {path}")
+        
+        # Open in default browser
+        webbrowser.open(f"file://{path}")
+        
+        # Optional: Clean up file after a delay (e.g. 5 seconds)
+        # Browser needs time to read it, so we can't delete immediately.
+        # A simple Timer works well here without blocking.
+        def cleanup():
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+                    logging.info("Cleaned up instructions file")
+            except:
+                pass
+                
+        Timer(10.0, cleanup).start()
+            
+    except Exception as e:
+        logging.error(f"Failed to show instructions: {e}")

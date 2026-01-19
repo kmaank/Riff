@@ -8,7 +8,7 @@ class ConfigManager:
     DEFAULT_CONFIG = {
         "version": "1.0.0",
         "hotkey": {
-            "combination": ["ctrl_l"],
+            "combination": "ctrl_l",
             "mode": "hold"
         },
         "audio": {

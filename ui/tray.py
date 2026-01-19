@@ -57,36 +57,31 @@ class SystemTray:
         }
 
     def _create_permissions_menu(self):
-        status = self.permission_manager.get_all_status()
-        
-        mic_mark = "✓" if status.get("microphone") else "✗"
-        acc_mark = "✓" if status.get("accessibility") else "✗"
-        auto_mark = "?" 
-        
+        # Simplified menu without dynamic checks (as requested)
         return pystray.Menu(
-            pystray.MenuItem(f"{mic_mark} Microphone (Open Settings)", self._req_mic),
-            pystray.MenuItem(f"{acc_mark} Accessibility (Open Settings)", self._req_acc),
-            pystray.MenuItem(f"Automation (Open Settings)", self._req_auto)
+            pystray.MenuItem("Microphone (Open Settings)", self._req_mic),
+            pystray.MenuItem("Input Monitoring (Open Settings)", self._req_input),
+            pystray.MenuItem("Accessibility (Open Settings)", self._req_acc),
+            pystray.MenuItem("Automation (Open Settings)", self._req_auto)
         )
 
     def _req_mic(self, icon, item):
         self.permission_manager.request_microphone()
-        self.update_menu()
+
+    def _req_input(self, icon, item):
+        self.permission_manager.open_input_monitoring_settings()
 
     def _req_acc(self, icon, item):
         self.permission_manager.request_accessibility()
-        self.update_menu()
 
     def _req_auto(self, icon, item):
         self.permission_manager.request_automation()
-        self.update_menu()
 
     def _create_menu(self):
-        # Dynamic label based on state
-        state_label = f"Status: {self.current_state.title()}"
+        # Static label "Let's Riff"
         
         return pystray.Menu(
-            pystray.MenuItem(state_label, None, enabled=False),
+            pystray.MenuItem("Let's Riff", None, enabled=False),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Start Recording", self._on_record_click, enabled=lambda item: self.current_state == "idle"),
             pystray.MenuItem("Stop Recording", self._on_stop_click, enabled=lambda item: self.current_state == "recording"),

@@ -8,17 +8,26 @@ struct ContentView: View {
         HStack(spacing: 0) {
             // Sidebar
             VStack(alignment: .leading, spacing: 10) {
-                Text("Riff")
-                    .font(.largeTitle)
-                    .fontWeight(.bold)
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [.orange, .yellow],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
+                if let imagePath = Bundle.main.path(forResource: "settings_logo", ofType: "png"),
+                   let nsImage = NSImage(contentsOfFile: imagePath) {
+                    Image(nsImage: nsImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(height: 60) // Adjust size as needed
+                        .padding(.bottom, 20)
+                } else {
+                    Text("Riff")
+                        .font(.largeTitle)
+                        .fontWeight(.bold)
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [.orange, .yellow],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
                         )
-                    )
-                    .padding(.bottom, 20)
+                        .padding(.bottom, 20)
+                }
 
                 SidebarButton(icon: "sparkles", title: "Style", id: "style", selection: $selectedTab)
                 SidebarButton(icon: "keyboard", title: "Keys", id: "keys", selection: $selectedTab)

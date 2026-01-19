@@ -39,6 +39,10 @@ class PermissionManager:
     def open_automation_settings(self):
         # Opens System Settings -> Privacy & Security -> Automation
         subprocess.run(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"])
+
+    def open_input_monitoring_settings(self):
+        # Opens System Settings -> Privacy & Security -> Input Monitoring
+        subprocess.run(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"])
         
     # Maintain legacy request methods for compatibility but redirect to settings
     def request_microphone(self):

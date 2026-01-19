@@ -23,12 +23,32 @@ def show_dialog(message, title="Riff", default_answer=None, buttons=["OK"], defa
     Returns the text entered (if any) or the button clicked.
     """
     buttons_str = ", ".join([f'"{b}"' for b in buttons])
-    cmd = f'display dialog "{message}" with title "{title}" buttons {{{buttons_str}}} default button "{default_button}" with icon {icon}'
+    # Force dialog to front using System Events
+    # Note: 'with title' is standard, but 'activate' ensures visibility for LSUIElement apps
+    full_script = f'''
+    tell application "System Events"
+        activate
+        display dialog "{message}" with title "{title}" buttons {{{buttons_str}}} default button "{default_button}" with icon {icon}
+        {f'default answer "{default_answer}"' if default_answer is not None else ''}
+    end tell
+    '''
     
+    # Clean up newlines for single-line execution if needed, 
+    # but run_applescript takes a script string.
+    # We'll pass the multiline script directly to osascript -e is tricky.
+    # Better to pipe it or use multiple -e. 
+    # Let's simplify and use the one-liner approach compatible with our helper.
+    
+    cmd = f'tell application "System Events" to display dialog "{message}" with title "{title}" buttons {{{buttons_str}}} default button "{default_button}" with icon {icon}'
     if default_answer is not None:
         cmd += f' default answer "{default_answer}"'
     
-    output = run_applescript(cmd)
+    # Prefix with 'activate' to force focus (System Events activate brings the dialog front)
+    # Actually 'tell application "System Events" to activate' works best.
+    
+    final_script = f'tell application "System Events" to activate\n{cmd}'
+    
+    output = run_applescript(final_script)
     
     if output:
         # Parse output "button returned:OK, text returned:foo"

@@ -1,13 +1,29 @@
-
-import threading
-import time
+import json
+import logging
 import os
 import tempfile
+import threading
+import time
+import subprocess
+import queue
 import sys
-import logging
-import json
 from datetime import datetime
+
 from pynput import keyboard
+from groq import Groq
+
+# Core components
+from core.audio_recorder import AudioRecorder
+from core.transcriber import Transcriber, TranscriptionError
+from core.refiner import Refiner, RefinementError
+from core.text_injector import TextInjector
+from core.context_detector import ContextDetector
+from utils.config_manager import ConfigManager
+from ui.tray import SystemTray
+from ui.native_onboarding import run_onboarding_native
+from utils.permissions import PermissionManager
+from ui.instructions import show_instructions
+
 
 # Setup Logging
 try:
@@ -32,19 +48,6 @@ logging.info("----------------------------------------------------------------")
 logging.info("Riff Logging Started")
 logging.info(f"Python Version: {sys.version}")
 
-from core.audio_recorder import AudioRecorder
-from core.transcriber import Transcriber, TranscriptionError
-from core.refiner import Refiner, RefinementError
-from core.text_injector import TextInjector
-from core.context_detector import ContextDetector
-from utils.config_manager import ConfigManager
-from ui.tray import SystemTray
-from ui.native_onboarding import run_onboarding_native
-from utils.permissions import PermissionManager
-from ui.instructions import show_instructions
-from groq import Groq
-import queue
-import subprocess
 
 class HistoryManager:
     def __init__(self):
@@ -85,6 +88,7 @@ class HistoryManager:
             logging.info(f"History entry added: {style}")
         except Exception as e:
             logging.error(f"Failed to save history: {e}")
+
 
 class ProcessingThread(threading.Thread):
     def __init__(self, audio_queue, config_manager, status_callback, notification_callback, refiner=None, transcriber=None):
@@ -179,9 +183,7 @@ class ProcessingThread(threading.Thread):
             system_prompt = self.config_manager.get_prompt(style)
             
             logging.info(f"Refining with style: {style}")
-            print(f"[DEBUG] Refining with style: {style}")
-            print(f"[DEBUG] Using Prompt: {system_prompt[:50]}...")
-
+            
             # Use the dedicated Refiner component
             if self.refiner:
                  return self.refiner.refine(text, style, prompt=system_prompt)
@@ -191,7 +193,6 @@ class ProcessingThread(threading.Thread):
 
         except Exception as e:
             logging.error(f"Refinement failed: {e}")
-            print(f"[ERROR] Refinement failed: {e}")
             return text 
 
     def type_text(self, text):
@@ -204,6 +205,7 @@ class ProcessingThread(threading.Thread):
             subprocess.run(["osascript", "-e", script], check=True)
         except subprocess.CalledProcessError as e:
             logging.error(f"Typing failed: {e}")
+
 
 class RiffApp:
     def __init__(self):
@@ -224,7 +226,7 @@ class RiffApp:
         )
         
         if not self.api_key:
-            self.tray.show_notification("EchoFlow", "Please set your Groq API Key in config.json")
+            self.tray.show_notification("Riff", "Please set your Groq API Key in config.json")
             logging.warning("API Key missing")
 
         self.transcriber = Transcriber(self.api_key) if self.api_key else None
@@ -253,7 +255,23 @@ class RiffApp:
         self.is_processing = False
         self.running = True
         self.listener = None
+        self.current_hotkey_str = self.config.get("hotkey.combination", "ctrl_l")
+        
+        # Determine initial hotkey string safely
+        if isinstance(self.current_hotkey_str, list) and len(self.current_hotkey_str) > 0:
+             self.current_hotkey_str = self.current_hotkey_str[0]
+        elif not isinstance(self.current_hotkey_str, str):
+             self.current_hotkey_str = "ctrl_l"
+             
         self.is_latched = False
+        
+        # Config Monitoring
+        self.config_mtime = 0
+        try:
+            self.config_mtime = os.path.getmtime(self.config.config_path)
+        except OSError:
+            pass
+            
         logging.info("Initialization Complete")
 
     def update_tray_status(self, status):
@@ -267,9 +285,8 @@ class RiffApp:
         if self.tray:
             self.tray.show_notification(title, message)
 
-
     def start(self):
-        print("EchoFlow Starting...")
+        print("Riff Starting...")
         logging.info("App start() called")
         
         # Check Accessibility Permission
@@ -282,23 +299,10 @@ class RiffApp:
             self.tray.show_notification("Permission Needed", "Accessibility access needed for hotkeys.")
         
         # Start Hotkey Listener
-        key_name = self.config.get("hotkey.combination", "f8")
-        if isinstance(key_name, list): key_name = key_name[0]
-        logging.info(f"Configured Hotkey: {key_name}")
-        print(f"Press {key_name} to record.")
+        self.start_listener()
         
-        try:
-            logging.info("Starting keyboard listener...")
-            self.listener = keyboard.Listener(
-                on_press=self.on_press,
-                on_release=self.on_release
-            )
-            self.listener.start()
-            logging.info("Keyboard listener started successfully")
-        except Exception as e:
-            print(f"Error starting hotkey listener: {e}")
-            logging.error(f"Error starting hotkey listener: {e}", exc_info=True)
-            self.tray.show_notification("Error", f"Hotkey failed: {e}")
+        # Start Config Monitor
+        threading.Thread(target=self.monitor_config, daemon=True).start()
         
         # Start Tray on Main Thread (Blocking)
         try:
@@ -306,8 +310,64 @@ class RiffApp:
         except KeyboardInterrupt:
             self.quit()
 
+    def start_listener(self):
+        # Stop existing if any
+        if self.listener:
+            try:
+                self.listener.stop()
+            except:
+                pass
+                
+        # Reload config to get latest key
+        self.config.load()
+        key_name = self.config.get("hotkey.combination", "ctrl_l")
+        if isinstance(key_name, list): key_name = key_name[0]
+        self.current_hotkey_str = key_name
+        
+        logging.info(f"Binder Hotkey: {key_name}")
+        print(f"Press {key_name} to record.")
+        
+        try:
+            self.listener = keyboard.Listener(
+                on_press=self.on_press,
+                on_release=self.on_release
+            )
+            self.listener.start()
+            logging.info("Keyboard listener started/restarted successfully")
+        except Exception as e:
+            print(f"Error starting hotkey listener: {e}")
+            logging.error(f"Error starting hotkey listener: {e}", exc_info=True)
+            self.tray.show_notification("Error", f"Hotkey failed: {e}")
+
+    def monitor_config(self):
+        """Polls config file for changes to reload hotkeys dynamically."""
+        while self.running:
+            time.sleep(2.0)
+            try:
+                if not os.path.exists(self.config.config_path):
+                    continue
+                    
+                mtime = os.path.getmtime(self.config.config_path)
+                if mtime > self.config_mtime:
+                    logging.info("Config file changed. Reloading...")
+                    self.config_mtime = mtime
+                    
+                    # Reload config
+                    new_config = self.config.load()
+                    new_key = new_config.get("hotkey", {}).get("combination", "ctrl_l")
+                    # Handle legacy list
+                    if isinstance(new_key, list): new_key = new_key[0]
+                    
+                    if new_key != self.current_hotkey_str:
+                        logging.info(f"Hotkey changed from {self.current_hotkey_str} to {new_key}. Restarting listener.")
+                        self.start_listener()
+                        self.tray.show_notification("Riff", f"Hotkey updated to: {new_key}")
+                        
+            except Exception as e:
+                logging.error(f"Error in config monitor: {e}")
+
     def get_trigger_key(self):
-        key_str = self.config.get("hotkey.combination", ["f8"])[0] if isinstance(self.config.get("hotkey.combination"), list) else self.config.get("hotkey.combination", "f8")
+        key_str = self.current_hotkey_str
         
         # Handle "f8" -> Key.f8, "cmd_r" -> Key.cmd_r
         if hasattr(keyboard.Key, key_str.lower()):
@@ -333,7 +393,7 @@ class RiffApp:
             if not self.is_latched:
                  logging.info("Latch Mode Enabled")
                  self.is_latched = True
-                 self.tray.show_notification("EchoFlow", "Latch Mode Enabled 🔒")
+                 self.tray.show_notification("Riff", "Latch Mode Enabled 🔒")
 
         # 3. Standard Trigger
         if key == trigger:
@@ -376,26 +436,6 @@ class RiffApp:
         if not self.recorder.recording and not self.is_processing:
             logging.info("Manual Start Triggered")
             self.tray.set_state("recording")
-
-    def process_audio(self):
-        """Stop recording, save to temp file, and queue for processing."""
-        logging.info("Processing Audio...")
-        try:
-            # Create a temp file path
-            temp_dir = tempfile.gettempdir()
-            filename = f"echoflow_recording_{time.time()}.wav"
-            filepath = os.path.join(temp_dir, filename)
-            
-            # Stop recording and save
-            self.recorder.stop_recording(filename=filepath)
-            
-            # Add to queue for processing thread
-            self.audio_queue.put(filepath)
-            
-        except Exception as e:
-            logging.error(f"Error processing audio: {e}")
-            self.tray.set_state("error")
-            self.tray.show_notification("Error", "Failed to process audio")
             self.recorder.start_recording()
 
     def stop_recording_manual(self):
@@ -405,8 +445,6 @@ class RiffApp:
             self.tray.set_state("processing")
             threading.Thread(target=self.process_audio).start()
 
-
-
     def process_audio(self):
         # Prevent double processing (e.g. key release + auto-stop race)
         if self.is_processing:
@@ -414,7 +452,6 @@ class RiffApp:
             
         self.is_processing = True
         logging.info("Processing Audio...")
-        import tempfile
         
         filename = os.path.join(tempfile.gettempdir(), f"echoflow_recording_{time.time()}.wav")
         
@@ -437,21 +474,47 @@ class RiffApp:
                 os.remove(filename)
 
     def open_settings(self):
-        import subprocess
         try:
             # Determine Path
             if getattr(sys, 'frozen', False):
-                # In .app bundle: bundle_dir/RiffControlCenter.app
-                # PyInstaller unpacks datas to sys._MEIPASS
-                base_dir = sys._MEIPASS
-                app_path = os.path.join(base_dir, "RiffControlCenter.app")
+                # Robust Search for Frozen App
+                candidates = []
+                
+                exe_dir = os.path.dirname(sys.executable)
+                
+                # 1. In Resources (Contents/Resources) - Preferred for macOS Bundle
+                candidates.append(os.path.abspath(os.path.join(exe_dir, "..", "Resources", "RiffControlCenter.app")))
+
+                # 2. sys._MEIPASS (OneFile / Internal)
+                if hasattr(sys, '_MEIPASS'):
+                   candidates.append(os.path.join(sys._MEIPASS, "RiffControlCenter.app"))
+                
+                # 3. In Frameworks (Contents/Frameworks) - PyInstaller often dumps here
+                candidates.append(os.path.abspath(os.path.join(exe_dir, "..", "Frameworks", "RiffControlCenter.app")))
+                
+                # 4. Alongside executable (Contents/MacOS)
+                candidates.append(os.path.join(exe_dir, "RiffControlCenter.app"))
+
+                app_path = candidates[0] # Default relative to Resources if nothing found
+                found = False
+                for c in candidates:
+                    if os.path.exists(c):
+                        # Verify it has contents
+                        if os.path.exists(os.path.join(c, "Contents", "MacOS")):
+                            app_path = c
+                            found = True
+                            break
+                
+                if not found:
+                    logging.warning("RiffControlCenter.app search failed, defaulting to Resources path")
             else:
                 # Dev: config_ui/build/RiffControlCenter.app
                 app_path = os.path.join(os.getcwd(), "config_ui", "build", "RiffControlCenter.app")
             
             logging.info(f"Launching settings app at: {app_path}")
             if os.path.exists(app_path):
-                subprocess.call(["open", app_path])
+                # Use open -a to force launch as application
+                subprocess.call(["open", "-a", app_path])
             else:
                 logging.error(f"Settings app not found at {app_path}")
                 # Fallback to file open

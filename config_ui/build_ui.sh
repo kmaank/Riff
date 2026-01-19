@@ -52,4 +52,9 @@ if [ -f "../assets/AppIcon.icns" ]; then
     cp "../assets/AppIcon.icns" "$OUTPUT_APP/Contents/Resources/AppIcon.icns"
 fi
 
+# Copy Settings Logo
+if [ -f "../assets/settings_logo.png" ]; then
+    cp "../assets/settings_logo.png" "$OUTPUT_APP/Contents/Resources/settings_logo.png"
+fi
+
 echo "✅ Built $OUTPUT_APP"
