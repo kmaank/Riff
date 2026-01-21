@@ -81,11 +81,28 @@ class ConfigManager:
         if config:
             self.config = config
         
+        # Atomic Write Strategy:
+        # 1. Write to a temporary file (e.g., config.json.tmp)
+        # 2. Flush and sync to disk
+        # 3. Rename temporary file to actual file (atomic)
+        tmp_path = self.config_path + ".tmp"
         try:
-            with open(self.config_path, 'w') as f:
+            with open(tmp_path, 'w') as f:
                 json.dump(self.config, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno()) # Ensure data hits the disk
+            
+            # Atomic swap
+            os.replace(tmp_path, self.config_path)
+            
         except Exception as e:
             print(f"Error saving config: {e}")
+            # Try to clean up temp file if it exists
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except:
+                    pass
 
     def get(self, key: str, default: Any = None) -> Any:
         keys = key.split('.')

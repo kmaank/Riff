@@ -3,7 +3,7 @@ import SwiftUI
 struct StyleView: View {
     @EnvironmentObject var settings: SettingsManager
     
-    let styles = ["formal", "casual"]
+    let styles = ["clean", "formal", "casual", "riff"]
     
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -41,22 +41,26 @@ struct StyleCard: View {
     
     var icon: String {
         switch style {
+        case "clean": return "wand.and.stars"
         case "code": return "chevron.left.forwardslash.chevron.right"
         case "pirate": return "flag.fill"
         case "formal": return "suit.tie.fill"
         case "casual": return "bubble.left.fill"
         case "tweet": return "bird.fill"
+        case "riff": return "music.note"
         default: return "sparkles"
         }
     }
     
     var color: Color {
         switch style {
+        case "clean": return .teal
         case "code": return .blue
         case "pirate": return .red
         case "formal": return .gray
         case "casual": return .purple
         case "tweet": return .cyan
+        case "riff": return .pink
         default: return .orange
         }
     }

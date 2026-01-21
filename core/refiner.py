@@ -1,5 +1,6 @@
-
+import logging
 from groq import Groq
+import time
 
 class RefinementError(Exception):
     pass
@@ -16,18 +17,22 @@ Do NOT act as a chatbot. Do NOT add intros/outros. Output ONLY the refined text.
 REMOVE: all filler words, slang, and casual phrasing.
 IMPROVE: structure, clarity, and vocabulary.
 ENSURE: professional tone suitable for business communication.
-Output ONLY the refined text.""",
+Do NOT act as a chatbot. Do NOT add intros/outros. Output ONLY the refined text.""",
 
         "casual": """You are a friendly editor. Clean up the transcript but keep it casual and conversational.
 REMOVE: excessive filler words only.
 FIX: basic punctuation.
 KEEP: slang, emojis (if any), and the speaker's personality.
-Output ONLY the refined text."""
+Do NOT act as a chatbot. Do NOT add intros/outros. Output ONLY the refined text.""",
+
+        "riff": """You are a friendly chatbot. Keep the conversation casual and conversational. Match the tone of the conversation and speaker's personality. DO not add intros/outros.
+Output ONLY the response text.""",
     }
 
     def __init__(self, api_key: str, model: str = "llama-3.3-70b-versatile"):
         self.client = Groq(api_key=api_key)
         self.model = model
+        logging.info(f"[Refiner] Init: Model={model}")
 
     def refine(self, text: str, style: str = "clean", prompt: str = None) -> str:
         if not text:
@@ -35,7 +40,9 @@ Output ONLY the refined text."""
             
         # Use provided prompt if available, otherwise fallback to internal dictionary (mostly for backward compatibility/standalone usage)
         system_prompt = prompt if prompt else self.STYLES.get(style, self.STYLES["clean"])
+        logging.info(f"[Refiner] Refine Request: {len(text)} chars, Style='{style}'")
         
+        start_time = time.time()
         try:
             chat_completion = self.client.chat.completions.create(
                 messages=[
@@ -53,9 +60,13 @@ Output ONLY the refined text."""
                 max_tokens=1024,
             )
             
-            return chat_completion.choices[0].message.content.strip()
+            result = chat_completion.choices[0].message.content.strip()
+            latency = (time.time() - start_time) * 1000
+            logging.info(f"[Refiner] Success: {len(result)} chars in {latency:.0f}ms")
+            return result
             
         except Exception as e:
+            logging.error(f"[Refiner] Failed: {e}", exc_info=True)
             raise RefinementError(f"Refinement failed: {e}")
 
 def main():

@@ -66,15 +66,19 @@ class SystemTray:
         )
 
     def _req_mic(self, icon, item):
+        logging.info("Tray: Requesting Microphone Permission")
         self.permission_manager.request_microphone()
 
     def _req_input(self, icon, item):
+        logging.info("Tray: Requesting Input Monitoring Permission")
         self.permission_manager.open_input_monitoring_settings()
 
     def _req_acc(self, icon, item):
+        logging.info("Tray: Requesting Accessibility Permission")
         self.permission_manager.request_accessibility()
 
     def _req_auto(self, icon, item):
+        logging.info("Tray: Requesting Automation Permission")
         self.permission_manager.request_automation()
 
     def _create_menu(self):
@@ -93,6 +97,7 @@ class SystemTray:
         )
 
     def _on_instructions_click(self, icon, item):
+        logging.info("Tray: Instructions clicked")
         if self.on_instructions:
             self.on_instructions()
     
@@ -101,14 +106,17 @@ class SystemTray:
             self.icon.menu = self._create_menu()
 
     def _on_record_click(self, icon, item):
+        logging.info("Tray: Start Recording clicked")
         if self.on_record:
             self.on_record()
 
     def _on_stop_click(self, icon, item):
+        logging.info("Tray: Stop Recording clicked")
         if self.on_stop:
             self.on_stop()
 
     def _quit(self):
+        logging.info("Tray: Quit clicked")
         if self.icon:
             self.icon.stop()
         if self.on_quit:

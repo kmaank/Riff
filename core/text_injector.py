@@ -1,34 +1,40 @@
-
+import logging
 from pynput.keyboard import Controller, Key
 import pyperclip
 import time
 import platform
+import subprocess
 
 class TextInjector:
     def __init__(self, use_clipboard=True):
         self.keyboard = Controller()
         self.use_clipboard = use_clipboard
         self.is_mac = platform.system() == "Darwin"
+        logging.info(f"[Injector] Init: Clipboard={use_clipboard}, OS={platform.system()}")
 
     def inject(self, text: str):
         if not text:
             return
 
-        print("[Injecting text...]")
+        logging.info(f"[Injector] Inserting {len(text)} chars...")
         
         # Use clipboard for long text or if forced
-        if self.use_clipboard or len(text) > 100:
+        # "Race to the Paste" Fix: Raised threshold to 300 to prefer typing
+        if self.use_clipboard or len(text) > 300:
+            logging.info("[Injector] Strategy: Clipboard Paste")
             self.inject_via_clipboard(text)
         else:
+            logging.info("[Injector] Strategy: Direct Typing")
             self.type_text(text)
             
-        print("[Done]")
+        logging.info("[Injector] Done")
 
     def type_text(self, text: str):
         # Type character by character
         for char in text:
             self.keyboard.type(char)
-            time.sleep(0.005) # Tiny delay for realism/reliability
+            # Adaptive Typing: Slower speed (0.01s) for reliability
+            time.sleep(0.01)
 
     def inject_via_clipboard(self, text: str):
         # Save current clipboard
@@ -43,19 +49,18 @@ class TextInjector:
         
         # Simulate paste (Cmd+V or Ctrl+V)
         if self.is_mac:
-            import subprocess
             try:
                 subprocess.run(["osascript", "-e", 'tell application "System Events" to keystroke "v" using command down'], check=True)
             except Exception as e:
-                print(f"AppleScript paste failed: {e}")
+                logging.warning(f"[Injector] AppleScript paste failed: {e}")
                 # Fallback to pynput
                 try:
                     with self.keyboard.pressed(Key.cmd):
                         self.keyboard.press('v')
                         self.keyboard.release('v')
                 except Exception as ex:
-                    print(f"Pynput paste failed: {ex}")
-                    print("Falling back to typing...")
+                    logging.error(f"[Injector] Pynput paste failed: {ex}")
+                    logging.info("[Injector] Falling back to typing...")
                     self.type_text(text)
         else:
             modifier = Key.ctrl
@@ -64,7 +69,8 @@ class TextInjector:
                 self.keyboard.release('v')
             
         # Restore clipboard after a moment
-        time.sleep(0.5)
+        # "Race to the Paste" Fix: Increased buffer to 0.8s
+        time.sleep(0.8)
         try:
             pyperclip.copy(old_clipboard)
         except:

@@ -6,6 +6,7 @@ struct Config: Codable {
     var api: ApiConfig
     var hotkey: HotkeyConfig
     var style: StyleConfig
+    var onboarding_completed: Bool? = false
 }
 
 struct AudioConfig: Codable {
@@ -47,7 +48,8 @@ class SettingsManager: ObservableObject {
             audio: AudioConfig(sample_rate: 16000, silence_threshold_ms: 600),
             api: ApiConfig(api_key: "", llm_model: "llama-3.3-70b-versatile"),
             hotkey: HotkeyConfig(combination: "f8"),
-            style: StyleConfig(active_style: "casual")
+            style: StyleConfig(active_style: "casual"),
+            onboarding_completed: false
         )
         
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!

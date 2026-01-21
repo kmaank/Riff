@@ -2,6 +2,9 @@
 from groq import Groq
 import os
 import sys
+import logging
+import time
+import re
 
 class TranscriptionError(Exception):
     pass
@@ -11,15 +14,26 @@ class Transcriber:
         if not api_key:
             raise TranscriptionError("API key is required.")
         try:
-            self.client = Groq(api_key=api_key, timeout=20.0)
+            self.client = Groq(api_key=api_key, timeout=300.0)
         except Exception as e:
             raise TranscriptionError(f"Failed to initialize Groq client: {e}")
         
     def transcribe_file(self, filepath: str) -> str:
         if not os.path.exists(filepath):
+            logging.error(f"[Transcriber] File not found: {filepath}")
             raise TranscriptionError(f"File not found: {filepath}")
+
+        # Groq API Limit Check (25MB)
+        file_size_bytes = os.path.getsize(filepath)
+        file_size_mb = file_size_bytes / (1024 * 1024)
+        logging.info(f"[Transcriber] Request: {filepath} ({file_size_mb:.2f} MB)")
+        
+        if file_size_mb > 25:
+             logging.error(f"[Transcriber] File too large: {file_size_mb:.2f}MB")
+             raise TranscriptionError(f"Audio file too large ({file_size_mb:.1f}MB). Groq limit is 25MB (~13 mins). Please shorten.")
             
         print("[Transcribing...]")
+        start_time = time.time()
         try:
             with open(filepath, "rb") as file:
                 transcription = self.client.audio.transcriptions.create(
@@ -28,25 +42,44 @@ class Transcriber:
                     response_format="json"
                 )
             
+            latency = (time.time() - start_time) * 1000
+            logging.info(f"[Transcriber] Success: {len(transcription.text)} chars in {latency:.0f}ms")
             print("[Transcription complete]")
             text = transcription.text.strip()
             
-            # Filter Hallucinations
-            # Whisper known to output these on silence
-            HALLUCINATIONS = [
-                "you", "You", "YOU",
-                "MBC News", "Amara.org",
-                "Subtitles by", "Subtitle by",
-                ".", ".." 
+            # Filter Hallucinations (Aggressive)
+            # 1. Exact Match List (Common Whisper glitches)
+            HALLUCINATIONS_EXACT = [
+                "you", "You", "YOU", ".", "..", "...",
+                "MBC News", "Amara.org", "Thank you", "Thanks",
+                "Subtitles by", "Subtitle by", "aaa aaaa"
             ]
             
-            if text in HALLUCINATIONS or not text:
-                print(f"[Filtered Hallucination: '{text}']")
+            if text in HALLUCINATIONS_EXACT or not text:
+                logging.warning(f"[Transcriber] Filtered exact hallucination: '{text}'")
+                print(f"[Filtered Hallucination (Exact): '{text}']")
                 return ""
+
+            # 2. Regex Patterns (Subtitle credits, bracketed noise)
+            
+            HALLUCINATION_PATTERNS = [
+                 r"\[.*\]",            # [Music], [Silence]
+                 r"\(.*\)",            # (Applause)
+                 r"^Subtitle.*",       # Subtitle by...
+                 r"^Translated by.*",  # Translated by...
+                 r"^[0-9]+$",          # Just numbers (often noise)
+            ]
+            
+            for pattern in HALLUCINATION_PATTERNS:
+                if re.search(pattern, text, re.IGNORECASE):
+                     logging.warning(f"[Transcriber] Filtered regex hallucination: '{text}' (Pattern: {pattern})")
+                     print(f"[Filtered Hallucination (Regex): '{text}']")
+                     return ""
                 
             return text
             
         except Exception as e:
+            logging.error(f"[Transcriber] Failed: {e}", exc_info=True)
             raise TranscriptionError(f"Transcription failed: {e}")
 
 def main():

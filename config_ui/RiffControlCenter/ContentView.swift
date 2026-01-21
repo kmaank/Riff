@@ -5,53 +5,57 @@ struct ContentView: View {
     @State private var selectedTab = "style"
 
     var body: some View {
-        HStack(spacing: 0) {
-            // Sidebar
-            VStack(alignment: .leading, spacing: 10) {
-                if let imagePath = Bundle.main.path(forResource: "settings_logo", ofType: "png"),
-                   let nsImage = NSImage(contentsOfFile: imagePath) {
-                    Image(nsImage: nsImage)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(height: 60) // Adjust size as needed
-                        .padding(.bottom, 20)
-                } else {
-                    Text("Riff")
-                        .font(.largeTitle)
-                        .fontWeight(.bold)
-                        .foregroundStyle(
-                            LinearGradient(
-                                colors: [.orange, .yellow],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
+        if (settings.config.onboarding_completed ?? false) == false || settings.config.api.api_key.isEmpty {
+            OnboardingView()
+        } else {
+            HStack(spacing: 0) {
+                // Sidebar
+                VStack(alignment: .leading, spacing: 10) {
+                    if let imagePath = Bundle.main.path(forResource: "settings_logo", ofType: "png"),
+                       let nsImage = NSImage(contentsOfFile: imagePath) {
+                        Image(nsImage: nsImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(height: 60) // Adjust size as needed
+                            .padding(.bottom, 20)
+                    } else {
+                        Text("Riff")
+                            .font(.largeTitle)
+                            .fontWeight(.bold)
+                            .foregroundStyle(
+                                LinearGradient(
+                                    colors: [.orange, .yellow],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
                             )
-                        )
-                        .padding(.bottom, 20)
+                            .padding(.bottom, 20)
+                    }
+
+                    SidebarButton(icon: "sparkles", title: "Style", id: "style", selection: $selectedTab)
+                    SidebarButton(icon: "keyboard", title: "Keys", id: "keys", selection: $selectedTab)
+                    SidebarButton(icon: "clock.arrow.circlepath", title: "History", id: "history", selection: $selectedTab)
+                    SidebarButton(icon: "book.fill", title: "How to", id: "help", selection: $selectedTab)
+
+                    Spacer()
                 }
+                .padding()
+                .frame(width: 180)
+                .background(Color(nsColor: .controlBackgroundColor))
 
-                SidebarButton(icon: "sparkles", title: "Style", id: "style", selection: $selectedTab)
-                SidebarButton(icon: "keyboard", title: "Keys", id: "keys", selection: $selectedTab)
-                SidebarButton(icon: "clock.arrow.circlepath", title: "History", id: "history", selection: $selectedTab)
-                SidebarButton(icon: "book.fill", title: "How to", id: "help", selection: $selectedTab)
-
-                Spacer()
-            }
-            .padding()
-            .frame(width: 180)
-            .background(Color(nsColor: .controlBackgroundColor))
-
-            // Main Content
-            VStack {
-                switch selectedTab {
-                case "style": StyleView()
-                case "keys": KeysView()
-                case "history": HistoryView()
-                case "help": HelpView()
-                default: StyleView()
+                // Main Content
+                VStack {
+                    switch selectedTab {
+                    case "style": StyleView()
+                    case "keys": KeysView()
+                    case "history": HistoryView()
+                    case "help": HelpView()
+                    default: StyleView()
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(nsColor: .windowBackgroundColor))
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(nsColor: .windowBackgroundColor))
         }
     }
 }
