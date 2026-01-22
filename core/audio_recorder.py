@@ -76,11 +76,12 @@ class AudioRecorder:
             # Check if already recording
             if self.recording:
                 if self.stream and self.stream.active:
-                    logging.warning("[AudioRecorder] Already recording. Ignoring start.")
+                    logging.warning("[AudioRecorder] Already recording (stream active). Ignoring start request.")
                     return True  # Already recording, that's OK
                 else:
                     # Stream died but flag is still set - force reset
-                    logging.warning("[AudioRecorder] WARN: Resurrecting dead stream state.")
+                    logging.error("[AudioRecorder] CRITICAL: Recording flag set but stream dead/missing! Force resetting...")
+                    logging.error(f"[AudioRecorder] State check: recording={self.recording}, stream={self.stream}, stream.active={self.stream.active if self.stream else 'N/A'}")
                     self._force_cleanup()
             
             try:
@@ -202,28 +203,69 @@ class AudioRecorder:
         return True
 
     def _force_cleanup(self):
-        """Force cleanup of all state without waiting."""
+        """Force cleanup of all state without waiting. Thread-safe."""
         logging.warning("[AudioRecorder] Force cleanup triggered")
-        self.recording = False
-        self.frames = []
-        self.silence_start_time = None
-        self.on_auto_stop = None
-        
-        # Try to close stream but don't wait
-        if self.stream:
-            try:
-                self.stream.abort()
-            except:
-                pass
-            try:
-                self.stream.close()
-            except:
-                pass
-            self.stream = None
+
+        # CRITICAL FIX: Use lock to ensure state changes are visible across threads
+        with self._lock:
+            self.recording = False
+            self.frames = []
+            self.silence_start_time = None
+            self.on_auto_stop = None
+
+            # Try to close stream but don't wait
+            if self.stream:
+                try:
+                    self.stream.abort()
+                except:
+                    pass
+                try:
+                    self.stream.close()
+                except:
+                    pass
+                self.stream = None
+
+        logging.info("[AudioRecorder] Force cleanup completed")
 
     def is_active(self):
         """Check if currently recording."""
         return self.recording and self.stream is not None and self.stream.active
+
+    def health_check(self):
+        """
+        Check recorder health and detect inconsistent states.
+        Returns: (is_healthy: bool, issues: list[str])
+        """
+        issues = []
+
+        with self._lock:
+            # Check for zombie states
+            if self.recording and not self.stream:
+                issues.append("Recording flag set but no stream exists")
+
+            if self.recording and self.stream and not self.stream.active:
+                issues.append("Recording flag set but stream is inactive")
+
+            if not self.recording and self.stream and self.stream.active:
+                issues.append("Stream active but recording flag not set")
+
+            # Log health status
+            if issues:
+                logging.warning(f"[AudioRecorder] Health check FAILED: {', '.join(issues)}")
+                return False, issues
+            else:
+                return True, []
+
+    def auto_recover(self):
+        """Attempt to automatically recover from inconsistent states."""
+        is_healthy, issues = self.health_check()
+
+        if not is_healthy:
+            logging.warning(f"[AudioRecorder] Auto-recovery triggered. Issues: {issues}")
+            self._force_cleanup()
+            return True
+
+        return False
 
     def cancel_recording(self):
         """Cancel recording without saving."""

@@ -235,11 +235,12 @@ class RiffApp:
         self.api_key = self.config.get("api.api_key")
 
         self.tray = SystemTray(
-            on_settings=self.open_settings, 
+            on_settings=self.open_settings,
             on_quit=self.quit,
             on_instructions=self.open_instructions,
             on_record=self.start_recording_manual,
             on_stop=self.stop_recording_manual,
+            on_force_reset=self.force_reset_state,
             permission_manager=self.permission_manager
         )
         
@@ -338,10 +339,13 @@ class RiffApp:
         
         # Start Hotkey Listener
         self.start_listener()
-        
+
         # Start Config Monitor
         threading.Thread(target=self.monitor_config, daemon=True).start()
-        
+
+        # Start Health Monitor
+        threading.Thread(target=self.health_monitor, daemon=True).start()
+
         # Start Tray on Main Thread (Blocking)
         try:
             self.tray.run()
@@ -385,25 +389,70 @@ class RiffApp:
             try:
                 if not os.path.exists(self.config.config_path):
                     continue
-                    
+
                 mtime = os.path.getmtime(self.config.config_path)
                 if mtime > self.config_mtime:
                     logging.info("Config file changed. Reloading...")
                     self.config_mtime = mtime
-                    
+
                     # Reload config
                     new_config = self.config.load()
                     new_key = new_config.get("hotkey", {}).get("combination", "ctrl_l")
-                    if isinstance(new_key, list): 
+                    if isinstance(new_key, list):
                         new_key = new_key[0]
-                    
+
                     if new_key != self.current_hotkey_str:
                         logging.info(f"Hotkey changed from {self.current_hotkey_str} to {new_key}. Restarting listener.")
                         self.start_listener()
                         self.tray.show_notification("Riff", f"Hotkey updated to: {new_key}")
-                        
+
             except Exception as e:
                 logging.error(f"Error in config monitor: {e}")
+
+    def health_monitor(self):
+        """Periodically checks recorder health and auto-recovers from stuck states."""
+        logging.info("[HealthMonitor] Starting health monitoring system")
+
+        while self.running:
+            time.sleep(30.0)  # Check every 30 seconds
+            try:
+                # Run health check
+                is_healthy, issues = self.recorder.health_check()
+
+                if not is_healthy:
+                    logging.error(f"[HealthMonitor] Unhealthy state detected: {issues}")
+                    self.dump_state()  # Detailed state dump for debugging
+
+                    # Attempt auto-recovery
+                    logging.warning("[HealthMonitor] Attempting auto-recovery...")
+                    recovered = self.recorder.auto_recover()
+
+                    if recovered:
+                        # Also reset app-level processing flag if stuck
+                        if self.is_processing:
+                            elapsed = time.time() - self.processing_start_time
+                            if elapsed > self.watchdog_timeout:
+                                logging.warning(f"[HealthMonitor] Processing stuck for {elapsed:.1f}s - resetting")
+                                self.is_processing = False
+                                self.tray.set_state("idle")
+
+                        log_activity("Auto-recovered from stuck state")
+                        self.tray.show_notification("Riff Recovered", "Auto-recovered from stuck state")
+
+                # Additional check: processing timeout detection
+                if self.is_processing:
+                    elapsed = time.time() - self.processing_start_time
+                    if elapsed > (self.watchdog_timeout + 30):  # Extra 30s grace period
+                        logging.error(f"[HealthMonitor] Processing timeout detected ({elapsed:.1f}s > {self.watchdog_timeout + 30}s)")
+                        logging.warning("[HealthMonitor] Force resetting processing state")
+                        self.is_processing = False
+                        self.tray.set_state("idle")
+                        self.recorder._force_cleanup()
+                        log_activity("Force reset due to processing timeout")
+                        self.tray.show_notification("Riff Reset", "Recovered from timeout")
+
+            except Exception as e:
+                logging.error(f"[HealthMonitor] Error in health check: {e}", exc_info=True)
 
     def get_trigger_key(self):
         key_str = self.current_hotkey_str
@@ -437,7 +486,13 @@ class RiffApp:
         # 3. Standard Trigger - Start Recording
         if key == trigger:
             logging.info("Hotkey Trigger Detected")
-            
+
+            # STATE VALIDATION: Run health check before starting
+            is_healthy, issues = self.recorder.health_check()
+            if not is_healthy:
+                logging.warning(f"[Hotkey] Unhealthy state detected before start: {issues}")
+                self.recorder.auto_recover()
+
             # Watchdog: Force Reset if stuck
             if self.is_processing:
                 elapsed = time.time() - self.processing_start_time
@@ -449,7 +504,7 @@ class RiffApp:
                 else:
                     logging.info(f"[Watchdog] Still processing ({elapsed:.1f}s elapsed), ignoring trigger")
                     return
-            
+
             # Start recording if not already
             if not self.recorder.recording and not self.is_processing:
                 try:
@@ -488,6 +543,12 @@ class RiffApp:
     
     def _stop_and_process(self):
         """Stop recording and queue for processing."""
+        # STATE VALIDATION: Verify recorder is actually recording
+        if not self.recorder.recording:
+            logging.warning("[Stop] Recorder not in recording state - ignoring stop request")
+            logging.warning(f"[Stop] State check: recording={self.recorder.recording}, is_processing={self.is_processing}")
+            return
+
         # Prevent double processing
         if self.is_processing:
             logging.warning("Already processing, ignoring stop request")
@@ -503,7 +564,10 @@ class RiffApp:
     def _do_stop_and_queue(self):
         """Actually stop recording and queue the file."""
         filename = os.path.join(tempfile.gettempdir(), f"riff_recording_{time.time()}.wav")
-        
+
+        logging.info(f"[StopAndQueue] Attempting to stop recording and save to: {filename}")
+        logging.info(f"[StopAndQueue] Pre-stop state: recording={self.recorder.recording}, stream={self.recorder.stream}")
+
         try:
             self.recorder.stop_recording(filename)
             
@@ -532,6 +596,7 @@ class RiffApp:
                     
         except Exception as e:
             logging.error(f"Error stopping recording: {e}", exc_info=True)
+            self.dump_state()  # Dump state for debugging
             log_activity(f"Error: {e}")
             self.tray.show_notification("Error", f"Recording failed: {e}")
             self.tray.set_state("idle")
@@ -540,8 +605,30 @@ class RiffApp:
 
     def start_recording_manual(self):
         """Manually start recording from tray."""
+        # Emergency health check and recovery before manual start
+        logging.info("Manual Start Triggered")
+
+        # Run health check to detect stuck states
+        is_healthy, issues = self.recorder.health_check()
+        if not is_healthy:
+            logging.warning(f"[Manual Start] Unhealthy recorder state detected: {issues}")
+            logging.warning("[Manual Start] Attempting auto-recovery...")
+            self.recorder.auto_recover()
+            time.sleep(0.1)  # Brief pause for cleanup
+
+        # Additional safety: Force reset if flags are stuck
+        if self.recorder.recording:
+            logging.error("[Manual Start] Recording flag still set after health check - forcing cleanup")
+            self.recorder._force_cleanup()
+            time.sleep(0.1)
+
+        if self.is_processing:
+            logging.error("[Manual Start] Processing flag stuck - forcing reset")
+            self.is_processing = False
+            self.tray.set_state("idle")
+
+        # Now attempt to start
         if not self.recorder.recording and not self.is_processing:
-            logging.info("Manual Start Triggered")
             log_activity("Recording Started (Manual)")
             try:
                 self.tray.set_state("recording")
@@ -550,6 +637,9 @@ class RiffApp:
                 logging.error(f"Manual start failed: {e}")
                 self.tray.show_notification("Error", str(e))
                 self.tray.set_state("idle")
+        else:
+            logging.error(f"[Manual Start] Cannot start - recording={self.recorder.recording}, is_processing={self.is_processing}")
+            self.tray.show_notification("Error", "Cannot start - app may be stuck. Try restarting Riff.")
 
     def stop_recording_manual(self):
         """Manually stop recording from tray."""
@@ -598,6 +688,55 @@ class RiffApp:
         """Callback to extend watchdog timeout for long recordings."""
         logging.info(f"[Watchdog] Extending timeout to {new_timeout:.1f}s")
         self.watchdog_timeout = new_timeout
+
+    def dump_state(self):
+        """Dump all current state for debugging."""
+        logging.info("="*60)
+        logging.info("[STATE DUMP] Current Application State:")
+        logging.info(f"  App.is_processing: {self.is_processing}")
+        logging.info(f"  App.is_latched: {self.is_latched}")
+        logging.info(f"  App.processing_start_time: {self.processing_start_time}")
+        logging.info(f"  App.watchdog_timeout: {self.watchdog_timeout}")
+        logging.info(f"  Recorder.recording: {self.recorder.recording}")
+        logging.info(f"  Recorder.stream: {self.recorder.stream}")
+        logging.info(f"  Recorder.stream.active: {self.recorder.stream.active if self.recorder.stream else 'N/A'}")
+        logging.info(f"  Tray.current_state: {self.tray.current_state}")
+        logging.info(f"  Audio queue size: {self.audio_queue.qsize()}")
+        logging.info("="*60)
+
+    def force_reset_state(self):
+        """Emergency force reset of all app state. Use when app is stuck."""
+        logging.warning("="*60)
+        logging.warning("[FORCE RESET] Emergency state reset initiated")
+        self.dump_state()
+        logging.warning("="*60)
+
+        try:
+            # Reset recorder
+            self.recorder._force_cleanup()
+
+            # Reset app state
+            self.is_processing = False
+            self.is_latched = False
+            self.processing_start_time = 0
+
+            # Reset tray
+            self.tray.set_state("idle")
+
+            # Clear audio queue
+            while not self.audio_queue.empty():
+                try:
+                    self.audio_queue.get_nowait()
+                except:
+                    break
+
+            logging.warning("[FORCE RESET] State reset completed successfully")
+            log_activity("Emergency state reset performed")
+            self.tray.show_notification("Riff Reset", "All state has been reset. Ready to record.")
+
+        except Exception as e:
+            logging.error(f"[FORCE RESET] Error during reset: {e}", exc_info=True)
+            self.tray.show_notification("Reset Failed", f"Error: {e}")
 
     def quit(self):
         logging.info("Quitting App")

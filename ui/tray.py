@@ -10,12 +10,13 @@ from pystray import Icon, Menu, MenuItem
 from utils.permissions import PermissionManager
 
 class SystemTray:
-    def __init__(self, on_settings, on_quit, on_instructions=None, on_record=None, on_stop=None, permission_manager=None):
+    def __init__(self, on_settings, on_quit, on_instructions=None, on_record=None, on_stop=None, on_force_reset=None, permission_manager=None):
         self.on_settings = on_settings
         self.on_quit = on_quit
         self.on_instructions = on_instructions
         self.on_record = on_record
         self.on_stop = on_stop
+        self.on_force_reset = on_force_reset
         self.permission_manager = permission_manager or PermissionManager()
         self.icon = None
         self.icons = self._create_icons()
@@ -83,7 +84,7 @@ class SystemTray:
 
     def _create_menu(self):
         # Static label "Let's Riff"
-        
+
         return pystray.Menu(
             pystray.MenuItem("Let's Riff", None, enabled=False),
             pystray.Menu.SEPARATOR,
@@ -93,6 +94,8 @@ class SystemTray:
             pystray.MenuItem("How to Use (Instructions)", self._on_instructions_click),
             pystray.MenuItem("Permissions ▸", self._create_permissions_menu()),
             pystray.MenuItem("Settings", self.on_settings),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("⚠️ Force Reset (If Stuck)", self._on_force_reset_click),
             pystray.MenuItem("Quit", self._quit)
         )
 
@@ -114,6 +117,11 @@ class SystemTray:
         logging.info("Tray: Stop Recording clicked")
         if self.on_stop:
             self.on_stop()
+
+    def _on_force_reset_click(self, icon, item):
+        logging.warning("Tray: Force Reset clicked")
+        if self.on_force_reset:
+            self.on_force_reset()
 
     def _quit(self):
         logging.info("Tray: Quit clicked")
