@@ -19,6 +19,9 @@ class ConfigManager:
         "style": {
             "active_style": "casual"
         },
+        "script_mode": {
+            "active_mode": "english_mixed"
+        },
         "api": {
             "api_key": "",
             "whisper_model": "whisper-large-v3",

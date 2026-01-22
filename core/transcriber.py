@@ -10,11 +10,19 @@ class TranscriptionError(Exception):
     pass
 
 class Transcriber:
-    def __init__(self, api_key: str):
+    # Script mode prompts for Whisper
+    SCRIPT_MODE_PROMPTS = {
+        "english_mixed": "Transcribe the audio. If non-English words are spoken, romanize them (e.g., 'Mujhe lagta hai' not 'मुझे लगता है'). Keep code-switching natural.",
+        "english_translated": "Transcribe and translate all audio to English. If non-English words are spoken, translate them to English.",
+        "original_mixed": "Transcribe the audio preserving original scripts (Devanagari, Arabic, etc.). Keep code-switching with original scripts."
+    }
+
+    def __init__(self, api_key: str, script_mode: str = "english_mixed"):
         if not api_key:
             raise TranscriptionError("API key is required.")
         try:
             self.client = Groq(api_key=api_key, timeout=300.0)
+            self.script_mode = script_mode
         except Exception as e:
             raise TranscriptionError(f"Failed to initialize Groq client: {e}")
         
@@ -35,12 +43,23 @@ class Transcriber:
         print("[Transcribing...]")
         start_time = time.time()
         try:
+            # Get prompt for script mode
+            prompt = self.SCRIPT_MODE_PROMPTS.get(self.script_mode, self.SCRIPT_MODE_PROMPTS["english_mixed"])
+
             with open(filepath, "rb") as file:
-                transcription = self.client.audio.transcriptions.create(
-                    file=(filepath, file.read()),
-                    model="whisper-large-v3",
-                    response_format="json"
-                )
+                # Build API params
+                api_params = {
+                    "file": (filepath, file.read()),
+                    "model": "whisper-large-v3",
+                    "response_format": "json",
+                    "prompt": prompt
+                }
+
+                # For english_translated, set language to English to force translation
+                if self.script_mode == "english_translated":
+                    api_params["language"] = "en"
+
+                transcription = self.client.audio.transcriptions.create(**api_params)
             
             latency = (time.time() - start_time) * 1000
             logging.info(f"[Transcriber] Success: {len(transcription.text)} chars in {latency:.0f}ms")

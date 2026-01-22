@@ -33,6 +33,7 @@ struct ContentView: View {
                     }
 
                     SidebarButton(icon: "sparkles", title: "Style", id: "style", selection: $selectedTab)
+                    SidebarButton(icon: "globe", title: "Script Mode", id: "script", selection: $selectedTab)
                     SidebarButton(icon: "keyboard", title: "Keys", id: "keys", selection: $selectedTab)
                     SidebarButton(icon: "clock.arrow.circlepath", title: "History", id: "history", selection: $selectedTab)
                     SidebarButton(icon: "book.fill", title: "How to", id: "help", selection: $selectedTab)
@@ -47,6 +48,7 @@ struct ContentView: View {
                 VStack {
                     switch selectedTab {
                     case "style": StyleView()
+                    case "script": ScriptModeView()
                     case "keys": KeysView()
                     case "history": HistoryView()
                     case "help": HelpView()

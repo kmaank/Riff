@@ -5,8 +5,9 @@ struct OnboardingView: View {
     @State private var step = 1
     @State private var apiKeyInput = ""
     @State private var isKeyValid = false
+    @State private var selectedScriptMode = "english_mixed"
     @State private var testInput = "Click here, hold your trigger key, and speak..."
-    
+
     var body: some View {
         VStack(spacing: 20) {
             if step == 1 {
@@ -14,15 +15,17 @@ struct OnboardingView: View {
             } else if step == 2 {
                 apiKeyStep
             } else if step == 3 {
-                micStep
+                scriptModeStep
             } else if step == 4 {
-                advancedPermissionsStep
+                micStep
             } else if step == 5 {
+                advancedPermissionsStep
+            } else if step == 6 {
                 testStep
             }
         }
         .padding()
-        .frame(width: 600, height: 400)
+        .frame(width: 700, height: 500)
         .background(Color(.windowBackgroundColor))
     }
     
@@ -136,11 +139,11 @@ struct OnboardingView: View {
             
             HStack {
                 Button("Back") {
-                    withAnimation { step = 2 }
+                    withAnimation { step = 3 }
                 }
-                
+
                 Button("Next") {
-                     withAnimation { step = 4 }
+                     withAnimation { step = 5 }
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -149,7 +152,123 @@ struct OnboardingView: View {
         .padding()
     }
 
-    // MARK: - Step 4: Accessibility & Input
+    // MARK: - Step 3: Script Mode Selection
+    var scriptModeStep: some View {
+        VStack(spacing: 25) {
+            Text("Choose Your Script Mode")
+                .font(.title)
+                .fontWeight(.bold)
+
+            Text("How should Riff handle multilingual dictation?")
+                .multilineTextAlignment(.center)
+                .foregroundColor(.secondary)
+
+            HStack(spacing: 15) {
+                ScriptModeOnboardingCard(
+                    mode: "english_mixed",
+                    title: "English Mixed",
+                    badge: "Recommended",
+                    icon: "textformat.abc",
+                    example: "Mujhe lagta hai we should meet",
+                    description: "Romanizes non-English, keeps vernacular",
+                    isSelected: selectedScriptMode == "english_mixed",
+                    action: { selectedScriptMode = "english_mixed" }
+                )
+
+                ScriptModeOnboardingCard(
+                    mode: "english_translated",
+                    title: "English Translated",
+                    badge: "",
+                    icon: "character.book.closed",
+                    example: "I think we should meet",
+                    description: "Translates everything to English",
+                    isSelected: selectedScriptMode == "english_translated",
+                    action: { selectedScriptMode = "english_translated" }
+                )
+
+                ScriptModeOnboardingCard(
+                    mode: "original_mixed",
+                    title: "Original Mixed",
+                    badge: "",
+                    icon: "globe",
+                    example: "मुझे लगता है we should meet",
+                    description: "Uses original script (Devanagari, etc.)",
+                    isSelected: selectedScriptMode == "original_mixed",
+                    action: { selectedScriptMode = "original_mixed" }
+                )
+            }
+
+            Spacer()
+
+            HStack {
+                Button("Back") {
+                    withAnimation { step = 2 }
+                }
+
+                Button("Next") {
+                    saveScriptMode()
+                    withAnimation { step = 4 }
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .controlSize(.large)
+        }
+        .padding()
+    }
+
+    // MARK: - Step 4: Microphone Permission
+    var micStep: some View {
+        VStack(spacing: 25) {
+            Image(systemName: "mic.fill")
+                .font(.system(size: 60))
+                .foregroundColor(.blue)
+
+            Text("Grant Permissions")
+                .font(.title)
+                .fontWeight(.bold)
+
+            Text("Riff needs access to Hear (Mic), See (Accessibility), and Type (Input).")
+                .multilineTextAlignment(.center)
+                .foregroundColor(.secondary)
+                .padding(.horizontal)
+
+            VStack(alignment: .center, spacing: 10) {
+                 Text("1. Enable Microphone")
+                    .font(.headline)
+
+                Text("**Hold Left Control for 2 seconds.**")
+                Text("When the pop-up appears, click **Open System Settings**.")
+                Text("Toggle ON for Riff.")
+            }
+            .padding()
+            .background(Color.gray.opacity(0.1))
+            .cornerRadius(8)
+            .frame(maxWidth: .infinity)
+            .multilineTextAlignment(.center)
+
+            Button("Open Microphone Settings") {
+                openMicrophoneSettings()
+            }
+            .font(.caption)
+
+            Spacer()
+
+            HStack {
+                Button("Back") {
+                    withAnimation { step = 3 }
+                }
+
+                Button("Next") {
+                     withAnimation { step = 5 }
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .controlSize(.large)
+        }
+        .padding()
+    }
+
+    // MARK: - Step 5: Accessibility & Input
     var advancedPermissionsStep: some View {
         VStack(spacing: 20) {
             Text("2. Accessibility & Input")
@@ -201,11 +320,11 @@ struct OnboardingView: View {
             
             HStack {
                 Button("Back") {
-                    withAnimation { step = 3 }
+                    withAnimation { step = 4 }
                 }
-                
+
                 Button("Next") {
-                    withAnimation { step = 5 }
+                    withAnimation { step = 6 }
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
@@ -217,8 +336,8 @@ struct OnboardingView: View {
              let _ = isAccessibilityTrusted()
         }
     }
-    
-    // MARK: - Step 5: Test Drive
+
+    // MARK: - Step 6: Test Drive
     var testStep: some View {
         VStack(spacing: 20) {
             Text("Test Drive")
@@ -241,9 +360,9 @@ struct OnboardingView: View {
             
             HStack {
                 Button("Back") {
-                    withAnimation { step = 4 }
+                    withAnimation { step = 5 }
                 }
-                
+
                 Button("Start Riffing") {
                     completeOnboarding()
                 }
@@ -253,16 +372,23 @@ struct OnboardingView: View {
         }
         .padding()
     }
-    
+
     func saveKey() {
         var newConfig = settings.config
         newConfig.api.api_key = apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
         // Ensure flag keeps false
-        newConfig.onboarding_completed = false 
+        newConfig.onboarding_completed = false
         settings.config = newConfig
         settings.saveConfig()
     }
-    
+
+    func saveScriptMode() {
+        var newConfig = settings.config
+        newConfig.script_mode.active_mode = selectedScriptMode
+        settings.config = newConfig
+        settings.saveConfig()
+    }
+
     func completeOnboarding() {
         var newConfig = settings.config
         newConfig.onboarding_completed = true
@@ -292,5 +418,86 @@ struct OnboardingView: View {
     
     func quitAndRestart() {
          NSApplication.shared.terminate(nil)
+    }
+}
+
+struct ScriptModeOnboardingCard: View {
+    let mode: String
+    let title: String
+    let badge: String
+    let icon: String
+    let example: String
+    let description: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var color: Color {
+        switch mode {
+        case "english_mixed": return .green
+        case "english_translated": return .blue
+        case "original_mixed": return .purple
+        default: return .gray
+        }
+    }
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 24))
+                    .foregroundStyle(isSelected ? .white : color)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                if !badge.isEmpty {
+                    Text(badge)
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(isSelected ? .white.opacity(0.3) : color.opacity(0.15))
+                        .foregroundStyle(isSelected ? .white : color)
+                        .cornerRadius(4)
+                }
+
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(isSelected ? .white : .primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Text(description)
+                    .font(.caption)
+                    .foregroundStyle(isSelected ? .white.opacity(0.9) : .secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Divider()
+                    .background(isSelected ? .white.opacity(0.3) : .gray.opacity(0.2))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Example:")
+                        .font(.caption2)
+                        .foregroundStyle(isSelected ? .white.opacity(0.7) : .secondary)
+
+                    Text(example)
+                        .font(.caption)
+                        .italic()
+                        .foregroundStyle(isSelected ? .white : .primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .lineLimit(2)
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(isSelected ? color : Color(nsColor: .controlBackgroundColor))
+                    .shadow(color: .black.opacity(isSelected ? 0.2 : 0.05), radius: isSelected ? 6 : 2, x: 0, y: isSelected ? 3 : 1)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(isSelected ? color.opacity(0.0) : Color.gray.opacity(0.2), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 }

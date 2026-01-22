@@ -97,7 +97,8 @@ class ProcessingThread(threading.Thread):
         
         # Fallback initialization
         if not self.transcriber:
-            self.transcriber = Transcriber(config_manager.get_api_key())
+            script_mode = config_manager.get("script_mode.active_mode", "english_mixed")
+            self.transcriber = Transcriber(config_manager.get_api_key(), script_mode=script_mode)
         if not self.refiner:
             self.refiner = Refiner(config_manager.get_api_key())
         if not self.injector:
@@ -249,7 +250,8 @@ class RiffApp:
             logging.warning("API Key missing")
 
         # Initialize Components
-        self.transcriber = Transcriber(self.api_key) if self.api_key else None
+        script_mode = self.config.get("script_mode.active_mode", "english_mixed")
+        self.transcriber = Transcriber(self.api_key, script_mode=script_mode) if self.api_key else None
         self.refiner = Refiner(self.api_key, model=self.config.get("api.llm_model")) if self.api_key else None
         
         self.recorder = AudioRecorder(

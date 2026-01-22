@@ -6,6 +6,7 @@ struct Config: Codable {
     var api: ApiConfig
     var hotkey: HotkeyConfig
     var style: StyleConfig
+    var script_mode: ScriptModeConfig
     var onboarding_completed: Bool? = false
 }
 
@@ -25,6 +26,10 @@ struct HotkeyConfig: Codable {
 
 struct StyleConfig: Codable {
     var active_style: String
+}
+
+struct ScriptModeConfig: Codable {
+    var active_mode: String
 }
 
 struct HistoryEntry: Codable, Identifiable {
@@ -49,6 +54,7 @@ class SettingsManager: ObservableObject {
             api: ApiConfig(api_key: "", llm_model: "llama-3.3-70b-versatile"),
             hotkey: HotkeyConfig(combination: "f8"),
             style: StyleConfig(active_style: "casual"),
+            script_mode: ScriptModeConfig(active_mode: "english_mixed"),
             onboarding_completed: false
         )
         
