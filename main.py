@@ -51,13 +51,14 @@ class HistoryManager:
             with open(self.history_file, 'w') as f:
                 json.dump([], f)
 
-    def add_entry(self, original, refined, style):
+    def add_entry(self, original, refined, style, script_mode="unknown"):
         try:
             entry = {
                 "timestamp": datetime.now().isoformat(),
                 "original": original,
                 "refined": refined,
-                "style": style
+                "style": style,
+                "script_mode": script_mode
             }
             
             history = []
@@ -74,7 +75,7 @@ class HistoryManager:
             with open(self.history_file, 'w') as f:
                 json.dump(history, f, indent=2)
                 
-            logging.info(f"History entry added: {style}")
+            logging.info(f"History entry added: {style}, script_mode: {script_mode}")
         except Exception as e:
             logging.error(f"Failed to save history: {e}")
 
@@ -161,6 +162,12 @@ class ProcessingThread(threading.Thread):
         # Reload config to get latest style changes from UI
         self.config_manager.load()
         
+        # Reload Script Mode
+        new_script_mode = self.config_manager.get("script_mode.active_mode", "english_mixed")
+        if self.transcriber.script_mode != new_script_mode:
+            logging.info(f"Script Mode changed from {self.transcriber.script_mode} to {new_script_mode}")
+            self.transcriber.script_mode = new_script_mode
+
         # 1. Transcribe with Retry
         logging.info(f"Transcribing {audio_path}...")
         raw_text = None
@@ -201,7 +208,8 @@ class ProcessingThread(threading.Thread):
             self.notification_callback("Refinement Failed", "Using raw transcript")
 
         # 4. Save History
-        self.history_manager.add_entry(raw_text, refined_text, style)
+        script_mode = self.transcriber.script_mode if self.transcriber else "unknown"
+        self.history_manager.add_entry(raw_text, refined_text, style, script_mode)
 
         # 5. Type/Inject
         self.injector.inject(refined_text)
@@ -671,7 +679,7 @@ class RiffApp:
             
             logging.info(f"Launching settings app at: {app_path}")
             if os.path.exists(app_path):
-                subprocess.call(["open", "-a", app_path])
+                subprocess.call(["open", app_path])
             else:
                 logging.error(f"Settings app not found at {app_path}")
                 subprocess.call(["open", self.config.config_path])
@@ -782,9 +790,11 @@ def launch_settings_app(config):
         else:
             app_path = os.path.join(os.getcwd(), "config_ui", "build", "RiffControlCenter.app")
         
-        logging.info(f"Launching settings app at: {app_path}")
+            logging.info(f"Launching settings app at: {app_path}")
         if os.path.exists(app_path):
-            subprocess.call(["open", "-a", app_path])
+            # Use 'open' directly on the path without '-a' to force opening this specific bundle
+            # '-a' often resolves to registered applications (which might be old versions in /Applications)
+            subprocess.call(["open", app_path])
         else:
             logging.error(f"Settings app not found at {app_path}")
             subprocess.call(["open", config.config_path])

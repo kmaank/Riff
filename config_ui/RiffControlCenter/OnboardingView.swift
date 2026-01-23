@@ -100,57 +100,7 @@ struct OnboardingView: View {
         .padding()
     }
     
-    // MARK: - Step 3: Microphone Permission
-    var micStep: some View {
-        VStack(spacing: 25) {
-            Image(systemName: "mic.fill")
-                .font(.system(size: 60))
-                .foregroundColor(.blue)
-            
-            Text("Grant Permissions")
-                .font(.title)
-                .fontWeight(.bold)
-                
-            Text("Riff needs access to Hear (Mic), See (Accessibility), and Type (Input).")
-                .multilineTextAlignment(.center)
-                .foregroundColor(.secondary)
-                .padding(.horizontal)
-            
-            VStack(alignment: .center, spacing: 10) {
-                 Text("1. Enable Microphone")
-                    .font(.headline)
-                
-                Text("**Hold Left Control for 2 seconds.**")
-                Text("When the pop-up appears, click **Open System Settings**.")
-                Text("Toggle ON for Riff.")
-            }
-            .padding()
-            .background(Color.gray.opacity(0.1))
-            .cornerRadius(8)
-            .frame(maxWidth: .infinity)
-            .multilineTextAlignment(.center)
-            
-            Button("Open Microphone Settings") {
-                openMicrophoneSettings()
-            }
-            .font(.caption)
-            
-            Spacer()
-            
-            HStack {
-                Button("Back") {
-                    withAnimation { step = 3 }
-                }
 
-                Button("Next") {
-                     withAnimation { step = 5 }
-                }
-                .buttonStyle(.borderedProminent)
-            }
-            .controlSize(.large)
-        }
-        .padding()
-    }
 
     // MARK: - Step 3: Script Mode Selection
     var scriptModeStep: some View {

@@ -15,7 +15,9 @@ class Transcriber:
     SCRIPT_MODE_PROMPTS = {
         "english_mixed": "Transcribe the audio naturally, keeping code-switching.",
         "english_translated": "Translate all speech to English.",
-        "original_mixed": "Transcribe preserving original scripts (Devanagari, Arabic, etc.)."
+        # Use the same prompt as english_mixed because it correctly captures original scripts (e.g. Devanagari)
+        # We just skip the romanization step in post-processing.
+        "original_mixed": "Transcribe the audio naturally, keeping code-switching."
     }
 
     def __init__(self, api_key: str, script_mode: str = "english_mixed"):
@@ -47,6 +49,7 @@ class Transcriber:
         try:
             # Get prompt for script mode
             prompt = self.SCRIPT_MODE_PROMPTS.get(self.script_mode, self.SCRIPT_MODE_PROMPTS["english_mixed"])
+            logging.info(f"[Transcriber] Using script_mode: {self.script_mode}")
 
             with open(filepath, "rb") as file:
                 # Build API params
@@ -67,6 +70,7 @@ class Transcriber:
             logging.info(f"[Transcriber] Success: {len(transcription.text)} chars in {latency:.0f}ms")
             print("[Transcription complete]")
             text = transcription.text.strip()
+            logging.info(f"[Transcriber] Whisper Raw Output: {text}")
 
             # Post-process based on script mode
             text = self._post_process_script_mode(text)
