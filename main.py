@@ -307,7 +307,10 @@ class RiffApp:
             self.config_mtime = os.path.getmtime(self.config.config_path)
         except OSError:
             pass
-            
+
+        # Control Center Process Tracking
+        self.control_center_process = None
+
         logging.info("Initialization Complete")
 
     @property
@@ -659,10 +662,23 @@ class RiffApp:
 
     def open_settings(self):
         try:
+            # Check if Control Center is already running
+            if self.control_center_process is not None:
+                poll_result = self.control_center_process.poll()
+                if poll_result is None:  # Still running
+                    logging.info("Control Center already running, bringing to front")
+                    # Use AppleScript to activate the running app
+                    try:
+                        subprocess.call(["osascript", "-e", 'tell application "RiffControlCenter" to activate'])
+                    except:
+                        pass  # If activation fails, continue to relaunch
+                    return
+
+            # Find Control Center app path
             if getattr(sys, 'frozen', False):
                 candidates = []
                 exe_dir = os.path.dirname(sys.executable)
-                
+
                 candidates.append(os.path.abspath(os.path.join(exe_dir, "..", "Resources", "RiffControlCenter.app")))
                 if hasattr(sys, '_MEIPASS'):
                     candidates.append(os.path.join(sys._MEIPASS, "RiffControlCenter.app"))
@@ -676,14 +692,21 @@ class RiffApp:
                         break
             else:
                 app_path = os.path.join(os.getcwd(), "config_ui", "build", "RiffControlCenter.app")
-            
+
             logging.info(f"Launching settings app at: {app_path}")
             if os.path.exists(app_path):
-                subprocess.call(["open", app_path])
+                # Launch the app binary directly to get a process handle
+                binary_path = os.path.join(app_path, "Contents", "MacOS", "RiffControlCenter")
+                if os.path.exists(binary_path):
+                    self.control_center_process = subprocess.Popen([binary_path])
+                    logging.info(f"Control Center launched with PID: {self.control_center_process.pid}")
+                else:
+                    # Fallback to open -a if binary not found
+                    subprocess.call(["open", "-a", app_path])
             else:
                 logging.error(f"Settings app not found at {app_path}")
                 subprocess.call(["open", self.config.config_path])
-                
+
         except Exception as e:
             logging.error(f"Could not open settings: {e}")
 
@@ -752,19 +775,36 @@ class RiffApp:
         logging.info("Quitting App")
         log_activity("Riff App Quit")
         self.running = False
-        
+
+        # Terminate Control Center if running
+        if self.control_center_process is not None:
+            try:
+                poll_result = self.control_center_process.poll()
+                if poll_result is None:  # Still running
+                    logging.info("Terminating Control Center process")
+                    self.control_center_process.terminate()
+                    # Give it 2 seconds to close gracefully
+                    try:
+                        self.control_center_process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        # Force kill if it doesn't close gracefully
+                        logging.warning("Control Center didn't close gracefully, force killing")
+                        self.control_center_process.kill()
+            except Exception as e:
+                logging.error(f"Error terminating Control Center: {e}")
+
         try:
             if self.listener:
                 self.listener.stop()
-        except: 
+        except:
             pass
-            
+
         try:
             self.audio_queue.put(None)
             self.processing_thread.join(timeout=2)
         except:
             pass
-             
+
         self.tray.stop()
         logging.info("Force exiting now.")
         os._exit(0)
