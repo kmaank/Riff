@@ -11,13 +11,12 @@ class TranscriptionError(Exception):
 
 class Transcriber:
     # Script mode prompts for Whisper
-    # Note: These are hints for Whisper. english_mixed uses post-processing for romanization.
+    # Note: Constraining prompts prevent hallucinations. Be explicit about "exactly", "verbatim", "do not add".
     SCRIPT_MODE_PROMPTS = {
-        "english_mixed": "Transcribe the audio naturally, keeping code-switching.",
-        "english_translated": "Translate all speech to English.",
-        # Use the same prompt as english_mixed because it correctly captures original scripts (e.g. Devanagari)
-        # We just skip the romanization step in post-processing.
-        "original_mixed": "Transcribe the audio naturally, keeping code-switching."
+        "english_mixed": "Transcribe exactly what is spoken, word for word. Keep both English and non-English words as heard. Do not add explanations, context, or extra words. Output only the verbatim speech.",
+        "english_translated": "Transcribe the spoken audio exactly as heard, translating any non-English words to English. Output only what was actually said, without additions or explanations.",
+        # Use the same constraining prompt for original_mixed
+        "original_mixed": "Transcribe exactly what is spoken, word for word, in the original language and script. Do not add explanations or extra words. Output only the verbatim speech."
     }
 
     def __init__(self, api_key: str, script_mode: str = "english_mixed"):
@@ -52,12 +51,13 @@ class Transcriber:
             logging.info(f"[Transcriber] Using script_mode: {self.script_mode}")
 
             with open(filepath, "rb") as file:
-                # Build API params
+                # Build API params with quality parameters
                 api_params = {
                     "file": (filepath, file.read()),
                     "model": "whisper-large-v3",
-                    "response_format": "json",
-                    "prompt": prompt
+                    "response_format": "verbose_json",  # Get confidence scores and segments
+                    "prompt": prompt,
+                    "temperature": 0.0,  # Deterministic transcription (no randomness)
                 }
 
                 # For english_translated, set language to English to force translation
@@ -71,6 +71,25 @@ class Transcriber:
             print("[Transcription complete]")
             text = transcription.text.strip()
             logging.info(f"[Transcriber] Whisper Raw Output: {text}")
+
+            # Check confidence scores to detect hallucinations (verbose_json provides these)
+            if hasattr(transcription, 'segments') and transcription.segments:
+                # Calculate average no_speech probability across segments
+                total_no_speech_prob = 0
+                segment_count = 0
+                for segment in transcription.segments:
+                    if hasattr(segment, 'no_speech_prob'):
+                        total_no_speech_prob += segment.no_speech_prob
+                        segment_count += 1
+
+                if segment_count > 0:
+                    avg_no_speech_prob = total_no_speech_prob / segment_count
+                    logging.info(f"[Transcriber] Avg no_speech probability: {avg_no_speech_prob:.3f}")
+
+                    # If average no_speech probability is very high, likely hallucination
+                    if avg_no_speech_prob > 0.8:
+                        logging.warning(f"[Transcriber] High no_speech probability ({avg_no_speech_prob:.3f}), likely hallucination")
+                        return ""
 
             # Post-process based on script mode
             text = self._post_process_script_mode(text)
@@ -89,15 +108,16 @@ class Transcriber:
                 return ""
 
             # 2. Regex Patterns (Subtitle credits, bracketed noise)
-            
+            # Note: Only filter patterns that are CLEARLY hallucinations, not legitimate content
             HALLUCINATION_PATTERNS = [
-                 r"\[.*\]",            # [Music], [Silence]
-                 r"\(.*\)",            # (Applause)
+                 r"^\[.*\]$",          # Pure bracketed content: [Music], [Silence]
+                 r"^\(.*\)$",          # Pure parenthetical: (Applause), (Music)
                  r"^Subtitle.*",       # Subtitle by...
                  r"^Translated by.*",  # Translated by...
-                 r"^[0-9]+$",          # Just numbers (often noise)
+                 r"^Thanks for watching",  # Common YouTube outro
+                 r"^Please subscribe",     # Common YouTube outro
             ]
-            
+
             for pattern in HALLUCINATION_PATTERNS:
                 if re.search(pattern, text, re.IGNORECASE):
                      logging.warning(f"[Transcriber] Filtered regex hallucination: '{text}' (Pattern: {pattern})")
