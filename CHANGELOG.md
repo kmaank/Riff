@@ -4,9 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
-
-## [2026-01-28] - Session: claude/review-riff-app-ffwNp
+## [1.2.7] - 2026-01-28
 
 ### Fixed
 - **Critical: Whisper Hallucinations**
@@ -45,6 +43,53 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.2.6] - 2026-01-22
+**Status:** Critical Bug Fixes Release
+**Commits:** `5401d54`, `12304ea`
+
+### Fixed
+- **Thread Safety Bug (Zombie State)**
+  - **Problem**: App getting stuck in zombie state after stream timeout (>20s).
+  - **Root Cause**: Thread safety violation in audio recorder cleanup where state changes were made without locks.
+  - **Solution**: Added thread locks, enhanced logging, and emergency state reset mechanisms.
+  - **Files Changed**: `core/audio_recorder.py`, `main.py`, `ui/tray.py`
+
+- **LLM Answering Bug**
+  - **Problem**: AI answering dictated questions instead of transcribing them.
+  - **Root Cause**: Refiner prompts lacked specific anti-chatbot instructions for dictation context.
+  - **Solution**: Implemented comprehensive anti-answer preambles and strict context rules.
+  - **Files Changed**: `core/refiner.py`
+
+### Added
+- **Health Monitoring System**: Automatically detects and recovers from stuck states every 30s.
+- **Force Reset**: Manual tray option to reset app state.
+- **State Dump**: Debug utility for logging app state during errors.
+
+---
+
+## [1.2.0] - 2026-01-18
+**Status:** Control Center Shipped
+
+### Added
+- **Riff Control Center**: A native macOS Dashboard (SwiftUI).
+  - **Style Picker**: Visual selection for personalities.
+  - **History**: View past transcriptions.
+  - **Keys**: Configure inputs.
+  - **Help**: Native guide.
+- **Local History**: Transcriptions saved to `history.json`.
+
+---
+
+## [1.0.0] - 2026-01-18
+**Status:** Stable Release
+
+### Added
+- **Global Smart Dictation**: F8 to Record.
+- **Context-Aware**: Auto-detects context.
+- **Native Onboarding**: AppleScript dialogs.
+
+---
+
 ## Format Guide
 
 When adding new changes, use this structure:
@@ -68,38 +113,4 @@ When adding new changes, use this structure:
   - **Impact**: What this improves
   - **Files Changed**: List of files
   - **Commit**: Short hash
-
-### Changed
-- **What Changed**
-  - **Before**: Old behavior
-  - **After**: New behavior
-  - **Reason**: Why this change was made
-  - **Files Changed**: List of files
-  - **Commit**: Short hash
-
-### Deprecated
-- Features that are being phased out
-
-### Removed
-- Features that were removed
-
-### Security
-- Security-related fixes
 ```
-
-### Categories Priority Order:
-1. **Security** - Always list first if present
-2. **Fixed** - Bug fixes
-3. **Added** - New features
-4. **Changed** - Changes to existing features
-5. **Deprecated** - Soon-to-be-removed features
-6. **Removed** - Removed features
-
-### Writing Style:
-- ✅ Start with user impact (what/why before how)
-- ✅ Include "Problem → Solution → Impact" for fixes
-- ✅ Be specific but concise
-- ✅ Link commit hashes for traceability
-- ✅ List all files changed
-- ❌ Don't include implementation details unless critical
-- ❌ Don't be too verbose (1-3 sentences per bullet)
