@@ -176,34 +176,20 @@ struct OnboardingView: View {
                     .font(.title)
                     .fontWeight(.bold)
 
-                Text("Riff needs access to Hear (Mic), See (Accessibility), and Type (Input).")
+                Text("Riff needs access to See (Accessibility) and Type (Input).")
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal)
 
-                // 1. Microphone Permission
-                VStack(alignment: .center, spacing: 10) {
-                    Text("1. Enable Microphone")
-                        .font(.headline)
-
-                    Text("**Hold Left Control for 2 seconds.**")
-                    Text("When the pop-up appears, click **Open System Settings**.")
-                    Text("Toggle ON for Riff.")
-                }
-                .padding()
-                .background(Color.gray.opacity(0.1))
-                .cornerRadius(8)
-                .frame(maxWidth: .infinity)
-                .multilineTextAlignment(.center)
-
-                Button("Open Microphone Settings") {
-                    openMicrophoneSettings()
-                }
-                .font(.caption)
+                // 1. Accessibility & Input (Renumbered to 1 since Mic is gone)
+                // Note: Keeping the UI focused on interactions that require explicit system settings.
+                // Microphone will be asked on-demand during Test Drive.
 
                 // 2. Accessibility & Input
                 VStack(alignment: .center, spacing: 10) {
-                    Text("2. Accessibility & Input Monitoring")
+                // 1. Accessibility & Input
+                VStack(alignment: .center, spacing: 10) {
+                    Text("1. Accessibility & Input Monitoring")
                         .font(.headline)
 
                     Text("**Note:** If Riff is already listed, you must reset it to ensure a clean link.")
@@ -275,7 +261,8 @@ struct OnboardingView: View {
                 .font(.title)
                 .fontWeight(.bold)
 
-            Text("Click below, hold your trigger key (Left Ctrl), and speak.")
+            Text("1. Press Left Ctrl. Grant microphone access.\n2. Hold Left Ctrl to speak.")
+                .multilineTextAlignment(.center)
                 .foregroundColor(.secondary)
 
             TextEditor(text: $testInput)
