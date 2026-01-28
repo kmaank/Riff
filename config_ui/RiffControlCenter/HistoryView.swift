@@ -75,19 +75,50 @@ struct HistoryRow: View {
     }
     
     func formatDate(_ iso: String) -> String {
-        // Parse ISO 8601 date and format with date + time
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-
-        guard let date = formatter.date(from: iso) else {
-            // Fallback to simple parsing if ISO8601 fails
-            return iso.components(separatedBy: "T").last?.components(separatedBy: ".").first ?? iso
+        // "Wall Clock" Strategy:
+        // The backend saves Local Time (e.g. 20:48). We want to see 20:48.
+        // We force both Parser and Display to use GMT. This treats the numbers as literals
+        // and prevents any system timezone offsets from shifting the time.
+        
+        // 1. Parser (Treat input string as GMT)
+        let parser = DateFormatter()
+        parser.calendar = Calendar(identifier: .iso8601)
+        parser.locale = Locale(identifier: "en_US_POSIX")
+        parser.timeZone = TimeZone(secondsFromGMT: 0) // GMT
+        
+        var date: Date?
+        
+        // Attempt 1: Full precision
+        parser.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSS"
+        date = parser.date(from: iso)
+        
+        // Attempt 2: No fractional seconds
+        if date == nil {
+            parser.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+            date = parser.date(from: iso)
+        }
+        
+        // Attempt 3: ISO Standard parser (fallback)
+        if date == nil {
+            let isoFormatter = ISO8601DateFormatter()
+            isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            isoFormatter.timeZone = TimeZone(secondsFromGMT: 0) // GMT
+            date = isoFormatter.date(from: iso)
         }
 
-        let displayFormatter = DateFormatter()
-        displayFormatter.dateStyle = .medium
-        displayFormatter.timeStyle = .short
+        if let validDate = date {
+            return formatDisplayDate(validDate)
+        }
 
+        // Fallback: Just show raw string if parsing fails
+        return iso.components(separatedBy: "T").last?.components(separatedBy: ".").first ?? iso
+    }
+    
+    func formatDisplayDate(_ date: Date) -> String {
+        let displayFormatter = DateFormatter()
+        displayFormatter.dateStyle = .medium // e.g. Jan 28, 2026
+        displayFormatter.timeStyle = .short  // e.g. 8:48 PM
+        displayFormatter.timeZone = TimeZone(secondsFromGMT: 0) // GMT (Crucial: Don't shift back to local)
         return displayFormatter.string(from: date)
     }
 }

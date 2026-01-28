@@ -9,6 +9,11 @@ source venv/bin/activate
 # Clean previous builds
 rm -rf build dist
 
+# Build UI (Control Center)
+echo "🎨 Building UI..."
+chmod +x config_ui/build_ui.sh
+./config_ui/build_ui.sh
+
 # Run PyInstaller
 # --clean: Clean cache
 # --noconfirm: Overwrite existing
