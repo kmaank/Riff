@@ -78,6 +78,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Confidence Scoring**: Tracks avg no_speech_prob across all segments
 - **Process Management**: Using `subprocess.Popen()` instead of `open -a` for better control
 
+### Fixed (Late Updates)
+- **History Date/Time Display**
+  - **Problem**: History timestamps shifted due to timezone conversion
+  - **Solution**: Implemented Wall Clock strategy to display server time exactly as received
+  - **Files Changed**: `config_ui/RiffControlCenter/HistoryView.swift`
+  - **Commit**: `1b13afd`
+
+- **Build Pipeline**
+  - **Solution**: `build_app.sh` now explicitly rebuilds the UI component before packaging
+  - **Files Changed**: `build_app.sh`
+  - **Commit**: `1b13afd`
+
 ---
 
 ## [1.2.6] - 2026-01-22
