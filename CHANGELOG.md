@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+
+## [1.2.8] - 2026-01-29
+
+### Changed
+- **Onboarding UI Refinements**
+  - **Permissions**: Removed explicit "Microphone" permission step to streamline flow (permission is requested on-demand).
+  - **Test Drive**: Clarified instructions to "1. Press Left Ctrl... 2. Hold Left Ctrl...".
+  - **Files Changed**: `config_ui/RiffControlCenter/OnboardingView.swift`
+  - **Commit**: `46c5346`
+
 ## [1.2.7] - 2026-01-28
 
 ### Added
