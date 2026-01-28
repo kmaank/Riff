@@ -700,6 +700,13 @@ class RiffApp:
                 if os.path.exists(binary_path):
                     self.control_center_process = subprocess.Popen([binary_path])
                     logging.info(f"Control Center launched with PID: {self.control_center_process.pid}")
+
+                    # Activate the app window (bring to front)
+                    time.sleep(0.3)  # Brief delay to let app initialize
+                    try:
+                        subprocess.call(["osascript", "-e", 'tell application "RiffControlCenter" to activate'])
+                    except Exception as e:
+                        logging.warning(f"Failed to activate Control Center window: {e}")
                 else:
                     # Fallback to open -a if binary not found
                     subprocess.call(["open", "-a", app_path])

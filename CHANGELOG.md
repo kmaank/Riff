@@ -28,6 +28,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - **Commit**: `d9a5cae`
 
 ### Fixed
+- **Control Center Window Not Appearing from Tray**
+  - **Problem**: Clicking "Settings" in tray launched Control Center (visible in dock) but window didn't come to front, requiring manual dock icon click
+  - **Root Cause**: `subprocess.Popen()` launches process but doesn't activate/focus window on macOS
+  - **Solution**: Added AppleScript activation after launch with 0.3s initialization delay
+  - **Impact**: Settings window now appears immediately when clicked from tray
+  - **Files Changed**: `main.py`
+  - **Commit**: `72ec6b7`
+
 - **Critical: Whisper Hallucinations**
   - **Problem**: Short phrases like "Gantt chart" generated complete hallucinated paragraphs
   - **Root Cause**: Vague prompts ("naturally", "keeping code-switching") gave Whisper too much freedom to elaborate
