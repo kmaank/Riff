@@ -5,6 +5,9 @@ import sys
 import logging
 import time
 import re
+import tempfile
+import numpy as np
+from scipy.io import wavfile
 
 class TranscriptionError(Exception):
     pass
@@ -25,25 +28,109 @@ class Transcriber:
         try:
             self.client = Groq(api_key=api_key, timeout=300.0)
             self.script_mode = script_mode
+            self.max_file_size_mb = 25  # Groq limit
+            self.chunk_duration_minutes = 10  # Safe chunk size (well under 13 min limit)
             logging.info(f"[Transcriber] Init: script_mode={script_mode}")
         except Exception as e:
             raise TranscriptionError(f"Failed to initialize Groq client: {e}")
         
-    def transcribe_file(self, filepath: str) -> str:
-        if not os.path.exists(filepath):
-            logging.error(f"[Transcriber] File not found: {filepath}")
-            raise TranscriptionError(f"File not found: {filepath}")
+    def _transcribe_chunked(self, filepath: str) -> str:
+        """
+        Transcribe large audio file by splitting into chunks.
+        Returns concatenated transcription of all chunks.
+        """
+        chunk_files = []
+        try:
+            # Split audio into chunks
+            chunk_files = self._split_audio_file(filepath)
 
-        # Groq API Limit Check (25MB)
-        file_size_bytes = os.path.getsize(filepath)
-        file_size_mb = file_size_bytes / (1024 * 1024)
-        logging.info(f"[Transcriber] Request: {filepath} ({file_size_mb:.2f} MB)")
-        
-        if file_size_mb > 25:
-             logging.error(f"[Transcriber] File too large: {file_size_mb:.2f}MB")
-             raise TranscriptionError(f"Audio file too large ({file_size_mb:.1f}MB). Groq limit is 25MB (~13 mins). Please shorten.")
-            
-        print("[Transcribing...]")
+            # Transcribe each chunk
+            all_transcriptions = []
+            for i, chunk_path in enumerate(chunk_files):
+                try:
+                    logging.info(f"[Transcriber] Transcribing chunk {i+1}/{len(chunk_files)}...")
+                    print(f"[Transcribing chunk {i+1}/{len(chunk_files)}...]")
+
+                    # Transcribe chunk (this will call the single-file logic below)
+                    chunk_text = self._transcribe_single_file(chunk_path)
+
+                    if chunk_text and chunk_text.strip():
+                        all_transcriptions.append(chunk_text.strip())
+                        logging.info(f"[Transcriber] Chunk {i+1} result: {len(chunk_text)} chars")
+                    else:
+                        logging.warning(f"[Transcriber] Chunk {i+1} returned empty")
+
+                except Exception as e:
+                    logging.error(f"[Transcriber] Failed to transcribe chunk {i+1}: {e}")
+                    # Continue with other chunks even if one fails
+                    continue
+
+            # Concatenate all transcriptions with space separator
+            if not all_transcriptions:
+                logging.warning("[Transcriber] No successful transcriptions from any chunk")
+                return ""
+
+            final_text = " ".join(all_transcriptions)
+            logging.info(f"[Transcriber] Chunked transcription complete: {len(final_text)} total chars from {len(all_transcriptions)} chunks")
+            print(f"[Chunked transcription complete: {len(all_transcriptions)} chunks processed]")
+
+            return final_text
+
+        finally:
+            # Clean up temporary chunk files
+            for chunk_path in chunk_files:
+                try:
+                    if os.path.exists(chunk_path):
+                        os.remove(chunk_path)
+                        logging.debug(f"[Transcriber] Deleted chunk: {chunk_path}")
+                except Exception as e:
+                    logging.warning(f"[Transcriber] Failed to delete chunk {chunk_path}: {e}")
+
+    def _split_audio_file(self, filepath: str) -> list:
+        """
+        Split large audio file into chunks that fit within API limits.
+        Returns list of temporary chunk file paths.
+        """
+        try:
+            # Read WAV file
+            sample_rate, audio_data = wavfile.read(filepath)
+
+            # Calculate chunk size in samples
+            chunk_duration_seconds = self.chunk_duration_minutes * 60
+            chunk_size_samples = int(sample_rate * chunk_duration_seconds)
+
+            # Split audio into chunks
+            num_chunks = int(np.ceil(len(audio_data) / chunk_size_samples))
+            logging.info(f"[Transcriber] Splitting {len(audio_data) / sample_rate / 60:.1f} min audio into {num_chunks} chunks of {self.chunk_duration_minutes} min each")
+
+            chunk_files = []
+            for i in range(num_chunks):
+                start_idx = i * chunk_size_samples
+                end_idx = min((i + 1) * chunk_size_samples, len(audio_data))
+                chunk_data = audio_data[start_idx:end_idx]
+
+                # Save chunk to temporary file
+                chunk_file = tempfile.NamedTemporaryFile(suffix=f"_chunk_{i}.wav", delete=False)
+                chunk_path = chunk_file.name
+                chunk_file.close()
+
+                wavfile.write(chunk_path, sample_rate, chunk_data)
+                chunk_files.append(chunk_path)
+
+                chunk_size_mb = os.path.getsize(chunk_path) / (1024 * 1024)
+                logging.info(f"[Transcriber] Created chunk {i+1}/{num_chunks}: {chunk_size_mb:.2f} MB")
+
+            return chunk_files
+
+        except Exception as e:
+            logging.error(f"[Transcriber] Failed to split audio file: {e}", exc_info=True)
+            raise TranscriptionError(f"Failed to split audio file: {e}")
+
+    def _transcribe_single_file(self, filepath: str) -> str:
+        """
+        Transcribe a single audio file (must be under size limit).
+        Internal method used by both transcribe_file and _transcribe_chunked.
+        """
         start_time = time.time()
         try:
             # Get prompt for script mode
@@ -129,6 +216,29 @@ class Transcriber:
         except Exception as e:
             logging.error(f"[Transcriber] Failed: {e}", exc_info=True)
             raise TranscriptionError(f"Transcription failed: {e}")
+
+    def transcribe_file(self, filepath: str) -> str:
+        """
+        Main transcription method. Automatically handles large files by chunking.
+        """
+        if not os.path.exists(filepath):
+            logging.error(f"[Transcriber] File not found: {filepath}")
+            raise TranscriptionError(f"File not found: {filepath}")
+
+        # Check file size
+        file_size_bytes = os.path.getsize(filepath)
+        file_size_mb = file_size_bytes / (1024 * 1024)
+        logging.info(f"[Transcriber] Request: {filepath} ({file_size_mb:.2f} MB)")
+
+        # If file is too large, split into chunks
+        if file_size_mb > self.max_file_size_mb:
+            logging.warning(f"[Transcriber] File exceeds {self.max_file_size_mb}MB limit, splitting into chunks...")
+            print(f"[Large file detected: {file_size_mb:.1f}MB. Splitting into chunks...]")
+            return self._transcribe_chunked(filepath)
+
+        # Normal single-file transcription
+        print("[Transcribing...]")
+        return self._transcribe_single_file(filepath)
 
     def _post_process_script_mode(self, text: str) -> str:
         """

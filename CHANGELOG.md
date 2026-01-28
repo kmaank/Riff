@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [1.2.7] - 2026-01-28
 
+### Added
+- **Large File Handling with Auto-Chunking**
+  - **Problem**: Audio files exceeding 25MB/13 minutes failed with Groq API limit error
+  - **Solution**:
+    - Automatically detect files > 25MB and split into 10-minute chunks
+    - Transcribe each chunk independently using Whisper
+    - Concatenate chunk transcriptions with intelligent spacing
+    - Auto-cleanup temporary chunk files after processing
+  - **Impact**: Supports unlimited recording length (tested with 57-minute/104MB files)
+  - **Files Changed**: `core/transcriber.py`
+  - **Commit**: `574957c`
+
 ### Fixed
 - **Critical: Whisper Hallucinations**
   - **Problem**: Short phrases like "Gantt chart" generated complete hallucinated paragraphs
