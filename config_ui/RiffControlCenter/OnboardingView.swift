@@ -17,10 +17,8 @@ struct OnboardingView: View {
             } else if step == 3 {
                 scriptModeStep
             } else if step == 4 {
-                micStep
-            } else if step == 5 {
                 advancedPermissionsStep
-            } else if step == 6 {
+            } else if step == 5 {
                 testStep
             }
         }
@@ -166,137 +164,120 @@ struct OnboardingView: View {
         .padding()
     }
 
-    // MARK: - Step 4: Microphone Permission
-    var micStep: some View {
-        VStack(spacing: 25) {
-            Image(systemName: "mic.fill")
-                .font(.system(size: 60))
-                .foregroundColor(.blue)
-
-            Text("Grant Permissions")
-                .font(.title)
-                .fontWeight(.bold)
-
-            Text("Riff needs access to Hear (Mic), See (Accessibility), and Type (Input).")
-                .multilineTextAlignment(.center)
-                .foregroundColor(.secondary)
-                .padding(.horizontal)
-
-            VStack(alignment: .center, spacing: 10) {
-                 Text("1. Enable Microphone")
-                    .font(.headline)
-
-                Text("**Hold Left Control for 2 seconds.**")
-                Text("When the pop-up appears, click **Open System Settings**.")
-                Text("Toggle ON for Riff.")
-            }
-            .padding()
-            .background(Color.gray.opacity(0.1))
-            .cornerRadius(8)
-            .frame(maxWidth: .infinity)
-            .multilineTextAlignment(.center)
-
-            Button("Open Microphone Settings") {
-                openMicrophoneSettings()
-            }
-            .font(.caption)
-
-            Spacer()
-
-            HStack {
-                Button("Back") {
-                    withAnimation { step = 3 }
-                }
-
-                Button("Next") {
-                     withAnimation { step = 5 }
-                }
-                .buttonStyle(.borderedProminent)
-            }
-            .controlSize(.large)
-        }
-        .padding()
-    }
-
-    // MARK: - Step 5: Accessibility & Input
+    // MARK: - Step 4: Grant Permissions (Microphone, Accessibility, Input)
     var advancedPermissionsStep: some View {
-        VStack(spacing: 20) {
-            Text("2. Accessibility & Input")
-                .font(.title2)
-                .fontWeight(.bold)
+        ScrollView {
+            VStack(spacing: 25) {
+                Image(systemName: "checkmark.shield.fill")
+                    .font(.system(size: 60))
+                    .foregroundColor(.blue)
 
-            VStack(alignment: .center, spacing: 5) {
-                Text("**Note:** If Riff is already listed, you must reset it to ensure a clean link.")
-                    .font(.caption)
-                    .foregroundColor(.orange)
-                    .padding(.bottom, 5)
-                    .multilineTextAlignment(.center)
-
-                Text("**Remove:** Select Riff and click the [ - ] (minus) button.")
-                Text("**Re-add:** Click the [ + ] (plus) button.")
-                Text("**Select:** Go to Applications > Double-click Riff.")
-                Text("**Enable:** Ensure the toggle is ON.")
-            }
-            .font(.system(size: 13))
-            .padding()
-            .background(Color.gray.opacity(0.1))
-            .cornerRadius(8)
-            .frame(maxWidth: .infinity)
-            .multilineTextAlignment(.center)
-            
-            if isAccessibilityTrusted() {
-                 Text("Accessibility Granted! 🎉")
-                    .foregroundColor(.green)
+                Text("Grant Permissions")
+                    .font(.title)
                     .fontWeight(.bold)
-            } else {
-                 Text("Waiting for Accessibility...")
-                    .foregroundColor(.secondary)
+
+                Text("Riff needs access to Hear (Mic), See (Accessibility), and Type (Input).")
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal)
+
+                // 1. Microphone Permission
+                VStack(alignment: .center, spacing: 10) {
+                    Text("1. Enable Microphone")
+                        .font(.headline)
+
+                    Text("**Hold Left Control for 2 seconds.**")
+                    Text("When the pop-up appears, click **Open System Settings**.")
+                    Text("Toggle ON for Riff.")
+                }
+                .padding()
+                .background(Color.gray.opacity(0.1))
+                .cornerRadius(8)
+                .frame(maxWidth: .infinity)
+                .multilineTextAlignment(.center)
+
+                Button("Open Microphone Settings") {
+                    openMicrophoneSettings()
+                }
+                .font(.caption)
+
+                // 2. Accessibility & Input
+                VStack(alignment: .center, spacing: 10) {
+                    Text("2. Accessibility & Input Monitoring")
+                        .font(.headline)
+
+                    Text("**Note:** If Riff is already listed, you must reset it to ensure a clean link.")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                        .padding(.bottom, 5)
+                        .multilineTextAlignment(.center)
+
+                    Text("**Remove:** Select Riff and click the [ - ] (minus) button.")
+                    Text("**Re-add:** Click the [ + ] (plus) button.")
+                    Text("**Select:** Go to Applications > Double-click Riff.")
+                    Text("**Enable:** Ensure the toggle is ON.")
+                }
+                .font(.system(size: 13))
+                .padding()
+                .background(Color.gray.opacity(0.1))
+                .cornerRadius(8)
+                .frame(maxWidth: .infinity)
+                .multilineTextAlignment(.center)
+
+                if isAccessibilityTrusted() {
+                    Text("Accessibility Granted! 🎉")
+                        .foregroundColor(.green)
+                        .fontWeight(.bold)
+                } else {
+                    Text("Waiting for Accessibility...")
+                        .foregroundColor(.secondary)
+                        .font(.caption)
+                }
+
+                HStack {
+                    Button("Open Accessibility Settings") {
+                        openAccessibilitySettings()
+                    }
                     .font(.caption)
-            }
 
-            HStack {
-                Button("Open Accessibility Settings") {
-                    openAccessibilitySettings()
-                }
-                .font(.caption)
-                
-                Button("Open Input Settings") {
-                    openInputSettings()
-                }
-                .font(.caption)
-            }
-            
-            Spacer()
-            
-            HStack {
-                Button("Back") {
-                    withAnimation { step = 4 }
+                    Button("Open Input Settings") {
+                        openInputSettings()
+                    }
+                    .font(.caption)
                 }
 
-                Button("Next") {
-                    withAnimation { step = 6 }
+                Spacer()
+
+                HStack {
+                    Button("Back") {
+                        withAnimation { step = 3 }
+                    }
+
+                    Button("Next") {
+                        withAnimation { step = 5 }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
             }
+            .padding()
         }
-        .padding()
         // Poll for permission changes
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
-             let _ = isAccessibilityTrusted()
+            let _ = isAccessibilityTrusted()
         }
     }
 
-    // MARK: - Step 6: Test Drive
+    // MARK: - Step 5: Test Drive
     var testStep: some View {
         VStack(spacing: 20) {
             Text("Test Drive")
                 .font(.title)
                 .fontWeight(.bold)
-            
+
             Text("Click below, hold your trigger key (Left Ctrl), and speak.")
                 .foregroundColor(.secondary)
-            
+
             TextEditor(text: $testInput)
                 .font(.system(size: 14))
                 .foregroundColor(.primary)
@@ -305,12 +286,12 @@ struct OnboardingView: View {
                 .cornerRadius(8)
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.3), lineWidth: 1))
                 .frame(height: 150)
-            
+
             Spacer()
-            
+
             HStack {
                 Button("Back") {
-                    withAnimation { step = 5 }
+                    withAnimation { step = 4 }
                 }
 
                 Button("Start Riffing") {

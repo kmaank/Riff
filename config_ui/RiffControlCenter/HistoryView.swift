@@ -75,7 +75,19 @@ struct HistoryRow: View {
     }
     
     func formatDate(_ iso: String) -> String {
-        // Simple parser
-        return iso.components(separatedBy: "T").last?.components(separatedBy: ".").first ?? iso
+        // Parse ISO 8601 date and format with date + time
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        guard let date = formatter.date(from: iso) else {
+            // Fallback to simple parsing if ISO8601 fails
+            return iso.components(separatedBy: "T").last?.components(separatedBy: ".").first ?? iso
+        }
+
+        let displayFormatter = DateFormatter()
+        displayFormatter.dateStyle = .medium
+        displayFormatter.timeStyle = .short
+
+        return displayFormatter.string(from: date)
     }
 }

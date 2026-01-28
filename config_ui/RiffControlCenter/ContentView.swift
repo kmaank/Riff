@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var settings: SettingsManager
-    @State private var selectedTab = "style"
+    @State private var selectedTab = "script-style"
 
     var body: some View {
         if (settings.config.onboarding_completed ?? false) == false || settings.config.api.api_key.isEmpty {
@@ -32,8 +32,7 @@ struct ContentView: View {
                             .padding(.bottom, 20)
                     }
 
-                    SidebarButton(icon: "globe", title: "Script", id: "script", selection: $selectedTab)
-                    SidebarButton(icon: "sparkles", title: "Style", id: "style", selection: $selectedTab)
+                    SidebarButton(icon: "sparkles", title: "Script & Style", id: "script-style", selection: $selectedTab)
                     SidebarButton(icon: "keyboard", title: "Keys", id: "keys", selection: $selectedTab)
                     SidebarButton(icon: "clock.arrow.circlepath", title: "History", id: "history", selection: $selectedTab)
                     SidebarButton(icon: "book.fill", title: "How to", id: "help", selection: $selectedTab)
@@ -47,12 +46,11 @@ struct ContentView: View {
                 // Main Content
                 VStack {
                     switch selectedTab {
-                    case "style": StyleView()
-                    case "script": ScriptModeView()
+                    case "script-style": ScriptAndStyleView()
                     case "keys": KeysView()
                     case "history": HistoryView()
                     case "help": HelpView()
-                    default: StyleView()
+                    default: ScriptAndStyleView()
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

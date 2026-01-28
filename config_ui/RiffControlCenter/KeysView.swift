@@ -17,56 +17,105 @@ struct KeysView: View {
     ]
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 30) {
-            Text("Keys & Shortcuts")
-                .font(.title2)
-                .bold()
-            
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Push-to-Talk Key")
-                    .font(.headline)
-                Text("Press and hold this key to speak.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                
-                Picker("", selection: $settings.config.hotkey.combination) {
-                    ForEach(availableKeys, id: \.1) { name, value in
-                        Text(name).tag(value)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 30) {
+                Text("Keys & Permissions")
+                    .font(.title2)
+                    .bold()
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Push-to-Talk Key")
+                        .font(.headline)
+                    Text("Press and hold this key to speak.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Picker("", selection: $settings.config.hotkey.combination) {
+                        ForEach(availableKeys, id: \.1) { name, value in
+                            Text(name).tag(value)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 200)
+                    .onChange(of: settings.config.hotkey.combination) { _ in
+                        settings.saveConfig()
                     }
                 }
-                .labelsHidden()
-                .frame(width: 200)
-                .onChange(of: settings.config.hotkey.combination) { _ in
-                    settings.saveConfig()
-                }
-            }
-            .padding()
-            .background(Color(nsColor: .controlBackgroundColor))
-            .cornerRadius(10)
-            
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Latch Mode")
-                    .font(.headline)
-                
-                HStack(spacing: 15) {
-                    Image(systemName: "lock.open.fill")
-                        .font(.title)
-                        .foregroundStyle(.orange)
-                    
-                    VStack(alignment: .leading) {
-                        Text("Shift + Trigger Key")                    .bold()
-                        Text("Hold Shift while pressing your trigger key to lock recording ON. Press trigger again to stop.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                .padding()
+                .background(Color(nsColor: .controlBackgroundColor))
+                .cornerRadius(10)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Latch Mode")
+                        .font(.headline)
+
+                    HStack(spacing: 15) {
+                        Image(systemName: "lock.open.fill")
+                            .font(.title)
+                            .foregroundStyle(.orange)
+
+                        VStack(alignment: .leading) {
+                            Text("Shift + Trigger Key")
+                                .bold()
+                            Text("Hold Shift while pressing your trigger key to lock recording ON. Press trigger again to stop.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
+                .padding()
+                .background(Color(nsColor: .controlBackgroundColor))
+                .cornerRadius(10)
+
+                // Permissions Section
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Permissions")
+                        .font(.headline)
+
+                    Text("Riff requires Microphone, Accessibility, and Input Monitoring permissions.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    VStack(spacing: 8) {
+                        Button("Open Microphone Settings") {
+                            openMicrophoneSettings()
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button("Open Accessibility Settings") {
+                            openAccessibilitySettings()
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button("Open Input Monitoring Settings") {
+                            openInputSettings()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding()
+                .background(Color(nsColor: .controlBackgroundColor))
+                .cornerRadius(10)
+
+                Spacer()
             }
-            .padding()
-            .background(Color(nsColor: .controlBackgroundColor))
-            .cornerRadius(10)
-            
-            Spacer()
+            .padding(30)
         }
-        .padding(30)
+    }
+
+    func openMicrophoneSettings() {
+        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!
+        NSWorkspace.shared.open(url)
+    }
+
+    func openAccessibilitySettings() {
+        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
+        NSWorkspace.shared.open(url)
+    }
+
+    func openInputSettings() {
+        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")!
+        NSWorkspace.shared.open(url)
     }
 }

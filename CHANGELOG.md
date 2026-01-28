@@ -18,6 +18,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - **Files Changed**: `core/transcriber.py`
   - **Commit**: `574957c`
 
+- **Control Center UX Improvements (3 changes)**
+  - **Changes**:
+    1. **Streamlined Onboarding**: Merged microphone permission page into combined permissions step (6 steps → 5 steps). Added permissions section to Keys tab for post-onboarding access.
+    2. **Merged Script & Style Tabs**: Combined into single "Script & Style" tab with Script Mode first, then Style options (5 tabs → 4 tabs). Cleaner sidebar navigation.
+    3. **Enhanced History Timestamps**: Now shows full date + time (e.g., "Jan 28, 2026 at 3:45 PM") instead of time-only format.
+  - **Impact**: Simpler onboarding flow, less cluttered interface, more informative history
+  - **Files Changed**: `OnboardingView.swift`, `KeysView.swift`, `ContentView.swift`, `ScriptAndStyleView.swift` (new), `HistoryView.swift`
+  - **Commit**: `d9a5cae`
+
 ### Fixed
 - **Critical: Whisper Hallucinations**
   - **Problem**: Short phrases like "Gantt chart" generated complete hallucinated paragraphs
