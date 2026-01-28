@@ -24,7 +24,7 @@ echo "🔨 Building package..."
 pkgbuild --component "$APP_PATH" \
          --install-location "/Applications" \
          --identifier "com.riff.app" \
-         --version "1.2.0" \
+         --version "1.2.6" \
          "$PKG_PATH"
 
 if [ -f "$PKG_PATH" ]; then
