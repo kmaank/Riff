@@ -28,6 +28,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - **Commit**: `d9a5cae`
 
 ### Fixed
+- **Long Transcriptions Not Pasting Completely**
+  - **Problem**: Transcriptions > 5000 chars (30+ minute recordings) were truncated when pasted, only partial text appeared
+  - **Root Cause**: macOS clipboard and app limitations - single large paste (8603 chars) overwhelms clipboard/app buffer
+  - **Solution**: Added chunked pasting - splits text into 4000-char chunks with sequential paste operations and delays between chunks
+  - **Impact**: Long recordings now paste reliably without data loss
+  - **Files Changed**: `core/text_injector.py`
+  - **Commit**: `c296803`
+
 - **Control Center Window Not Appearing from Tray**
   - **Problem**: Clicking "Settings" in tray launched Control Center (visible in dock) but window didn't come to front, requiring manual dock icon click
   - **Root Cause**: `subprocess.Popen()` launches process but doesn't activate/focus window on macOS
