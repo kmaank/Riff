@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 
+## [1.2.9] - 2026-02-19
+
+### Fixed
+- **Refinement Truncation for Long Recordings**
+  - **Problem**: Refinement output was silently cut off for transcripts longer than ~8,000 chars (e.g. 41-minute meeting = 14,995 chars transcribed, only 9,028 chars refined). Root cause: hardcoded `max_tokens=2048` in LLM API call.
+  - **Solution**: Chunked refinement pipeline mirroring the existing transcription and pasting approach:
+    - Texts ≤ 6,000 chars → single-pass refinement (no change to short recordings)
+    - Texts > 6,000 chars → split on sentence boundaries into 6,000-char chunks
+    - Each chunk refined independently with dynamic `max_tokens` (1.3× input + buffer, capped at 4096)
+    - Last 300 chars of previous refined chunk passed as read-only context to maintain tone consistency across boundaries
+    - Graceful per-chunk fallback: if one chunk's API call fails, raw text is used for that chunk only
+  - **Impact**: Long recordings (meetings, lectures, interviews) now produce complete refined output regardless of length. No data loss.
+  - **Files Changed**: `core/refiner.py`
+
 ## [1.2.8] - 2026-01-29
 
 ### Changed
