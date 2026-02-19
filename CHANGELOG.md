@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 
+## [1.3.0] - 2026-02-19
+
+### Fixed
+- **Control Center Lifecycle: Duplicate Windows**
+  - **Problem**: Clicking "Settings" from the tray while Control Center was already open (e.g. left open after onboarding) launched a second window instead of bringing the existing one to front. Root cause: `open_settings()` only checked `self.control_center_process` which is `None` when CC was opened via onboarding.
+  - **Solution**: Added `_is_control_center_running()` which checks both the tracked subprocess handle and a system-wide `pgrep -x RiffControlCenter`. If CC is running by any means, activates the existing window via AppleScript instead of launching a new instance.
+  - **Impact**: Only one Control Center window ever exists regardless of how it was originally opened.
+
+- **Control Center Lifecycle: Asymmetric Quit**
+  - **Problem**: Quitting from the tray icon correctly closed both apps. Closing Control Center from the dock left the tray running as an orphaned background process.
+  - **Solution**: Added `_ensure_cc_watcher()` which starts a lightweight daemon thread (polls every 1.5s) whenever CC is running. When CC exits and `self.running` is still `True` (user-initiated close, not our quit), it calls `quit()` to terminate the tray too. `self.running` is set `False` at the top of `quit()` so the watcher never double-fires.
+  - **Impact**: Closing Control Center from the dock now correctly quits the entire app.
+  - **Files Changed**: `main.py`
+
 ## [1.2.9] - 2026-02-19
 
 ### Fixed

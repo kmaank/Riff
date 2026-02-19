@@ -310,6 +310,7 @@ class RiffApp:
 
         # Control Center Process Tracking
         self.control_center_process = None
+        self._cc_watcher_running = False  # Prevents duplicate watcher threads
 
         logging.info("Initialization Complete")
 
@@ -660,19 +661,74 @@ class RiffApp:
             logging.info("Manual Stop Triggered")
             self._stop_and_process()
 
+    def _is_control_center_running(self) -> bool:
+        """
+        Return True if RiffControlCenter is running by any means.
+
+        Checks both our tracked subprocess handle AND any system process
+        named 'RiffControlCenter'. This covers:
+          - CC launched by us via the tray Settings button
+          - CC opened during onboarding (launch_settings_app)
+          - CC opened manually by the user
+        """
+        # 1. Our tracked process
+        if self.control_center_process is not None:
+            if self.control_center_process.poll() is None:
+                return True
+            self.control_center_process = None  # Process exited, clear handle
+
+        # 2. System-wide check (catches any other launch path)
+        try:
+            result = subprocess.run(
+                ["pgrep", "-x", "RiffControlCenter"],
+                capture_output=True, text=True
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def _ensure_cc_watcher(self):
+        """
+        Start a watcher thread (at most one) that quits the tray app
+        when Control Center is closed by the user from the dock.
+
+        The watcher polls every 1.5 s. When CC disappears and self.running
+        is still True it means the user closed CC — so we quit the tray too.
+        self.running is set to False first in quit(), so if we initiated the
+        shutdown the watcher silently exits without calling quit() again.
+        """
+        if self._cc_watcher_running:
+            return
+
+        self._cc_watcher_running = True
+
+        def watch():
+            logging.info("[CCWatcher] Watcher started")
+            while self.running:
+                time.sleep(1.5)
+                if not self._is_control_center_running():
+                    if self.running:
+                        logging.info("[CCWatcher] Control Center closed by user - quitting tray app")
+                        self.quit()
+                    break
+            self._cc_watcher_running = False
+            logging.info("[CCWatcher] Watcher stopped")
+
+        threading.Thread(target=watch, daemon=True).start()
+
     def open_settings(self):
         try:
-            # Check if Control Center is already running
-            if self.control_center_process is not None:
-                poll_result = self.control_center_process.poll()
-                if poll_result is None:  # Still running
-                    logging.info("Control Center already running, bringing to front")
-                    # Use AppleScript to activate the running app
-                    try:
-                        subprocess.call(["osascript", "-e", 'tell application "RiffControlCenter" to activate'])
-                    except:
-                        pass  # If activation fails, continue to relaunch
-                    return
+            # System-wide check: covers CC opened via onboarding, manual open,
+            # or a previous tray launch. Prevents duplicate windows.
+            if self._is_control_center_running():
+                logging.info("Control Center already running, bringing to front")
+                try:
+                    subprocess.call(["osascript", "-e", 'tell application "RiffControlCenter" to activate'])
+                except Exception as e:
+                    logging.warning(f"Failed to activate Control Center window: {e}")
+                # Make sure the watcher is running even if we didn't launch CC
+                self._ensure_cc_watcher()
+                return
 
             # Find Control Center app path
             if getattr(sys, 'frozen', False):
@@ -695,20 +751,21 @@ class RiffApp:
 
             logging.info(f"Launching settings app at: {app_path}")
             if os.path.exists(app_path):
-                # Launch the app binary directly to get a process handle
                 binary_path = os.path.join(app_path, "Contents", "MacOS", "RiffControlCenter")
                 if os.path.exists(binary_path):
                     self.control_center_process = subprocess.Popen([binary_path])
                     logging.info(f"Control Center launched with PID: {self.control_center_process.pid}")
 
-                    # Activate the app window (bring to front)
-                    time.sleep(0.3)  # Brief delay to let app initialize
+                    # Bring window to front after brief init delay
+                    time.sleep(0.3)
                     try:
                         subprocess.call(["osascript", "-e", 'tell application "RiffControlCenter" to activate'])
                     except Exception as e:
                         logging.warning(f"Failed to activate Control Center window: {e}")
+
+                    # Watch CC - quit tray if user closes CC from dock
+                    self._ensure_cc_watcher()
                 else:
-                    # Fallback to open -a if binary not found
                     subprocess.call(["open", "-a", app_path])
             else:
                 logging.error(f"Settings app not found at {app_path}")
