@@ -4,7 +4,13 @@ import os
 
 datas = []
 binaries = []
-hiddenimports = ['pystray', 'PIL', 'pynput', 'groq', 'AVFoundation', 'ApplicationServices', 'objc']
+hiddenimports = [
+    'pystray', 'PIL', 'pynput', 'groq',
+    'AVFoundation', 'ApplicationServices', 'objc',
+    'numpy', 'scipy', 'scipy.io', 'scipy.io.wavfile', 'sounddevice',
+    'pyperclip', 'plyer', 'plyer.platforms', 'plyer.platforms.macosx',
+    'plyer.platforms.macosx.notification',
+]
 hiddenimports += collect_submodules('ui')
 
 tmp_ret = collect_all('pystray')

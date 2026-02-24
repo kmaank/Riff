@@ -96,12 +96,22 @@ class ProcessingThread(threading.Thread):
         self.injector = injector
         self.history_manager = HistoryManager()
         
-        # Fallback initialization
+        # Fallback initialization (may fail if API key not yet configured)
         if not self.transcriber:
-            script_mode = config_manager.get("script_mode.active_mode", "english_mixed")
-            self.transcriber = Transcriber(config_manager.get_api_key(), script_mode=script_mode)
+            try:
+                api_key = config_manager.get_api_key()
+                if api_key:
+                    script_mode = config_manager.get("script_mode.active_mode", "english_mixed")
+                    self.transcriber = Transcriber(api_key, script_mode=script_mode)
+            except Exception as e:
+                logging.warning(f"Transcriber not initialized (API key missing?): {e}")
         if not self.refiner:
-            self.refiner = Refiner(config_manager.get_api_key())
+            try:
+                api_key = config_manager.get_api_key()
+                if api_key:
+                    self.refiner = Refiner(api_key)
+            except Exception as e:
+                logging.warning(f"Refiner not initialized (API key missing?): {e}")
         if not self.injector:
             self.injector = TextInjector()
 
@@ -135,7 +145,13 @@ class ProcessingThread(threading.Thread):
 
     def _process_audio_file(self, audio_path):
         """Process a single audio file through the pipeline."""
-        
+
+        # Guard: API key may not be configured yet (first run)
+        if not self.transcriber:
+            logging.warning("Transcriber not initialized — API key missing")
+            self.notification_callback("Setup Required", "Please set your Groq API key in Settings")
+            return
+
         # Calculate duration for watchdog
         try:
             f_size = os.path.getsize(audio_path)
@@ -254,8 +270,7 @@ class RiffApp:
         )
         
         if not self.api_key:
-            self.tray.show_notification("Riff", "Please set your Groq API Key in config.json")
-            logging.warning("API Key missing")
+            logging.warning("API Key missing — app will start but recording disabled until key is set")
 
         # Initialize Components
         script_mode = self.config.get("script_mode.active_mode", "english_mixed")
@@ -354,8 +369,17 @@ class RiffApp:
         # Start Hotkey Listener
         self.start_listener()
 
-        # Start Config Monitor
+        # Start Config Monitor (also detects API key changes from onboarding)
         threading.Thread(target=self.monitor_config, daemon=True).start()
+
+        # Notify user if API key is missing (first run — onboarding in progress)
+        if not self.api_key:
+            # Delay slightly so tray icon is visible before notification
+            def _notify_setup():
+                time.sleep(1.5)
+                self.tray.show_notification("Riff — Setup Required",
+                                            "Please enter your Groq API key in the Settings window.")
+            threading.Thread(target=_notify_setup, daemon=True).start()
 
         # Start Health Monitor
         threading.Thread(target=self.health_monitor, daemon=True).start()
@@ -397,7 +421,7 @@ class RiffApp:
             self.tray.show_notification("Error", f"Hotkey failed: {e}")
 
     def monitor_config(self):
-        """Polls config file for changes to reload hotkeys dynamically."""
+        """Polls config file for changes to reload hotkeys and API key dynamically."""
         while self.running:
             time.sleep(2.0)
             try:
@@ -419,6 +443,24 @@ class RiffApp:
                         logging.info(f"Hotkey changed from {self.current_hotkey_str} to {new_key}. Restarting listener.")
                         self.start_listener()
                         self.tray.show_notification("Riff", f"Hotkey updated to: {new_key}")
+
+                    # Check if API key was just configured (first-run onboarding)
+                    new_api_key = new_config.get("api", {}).get("api_key", "")
+                    if new_api_key and not self.api_key:
+                        logging.info("[ConfigMonitor] API key detected — initializing transcriber and refiner")
+                        self.api_key = new_api_key
+                        try:
+                            script_mode = self.config.get("script_mode.active_mode", "english_mixed")
+                            self.transcriber = Transcriber(new_api_key, script_mode=script_mode)
+                            self.refiner = Refiner(new_api_key, model=self.config.get("api.llm_model"))
+                            # Update the processing thread's references
+                            self.processing_thread.transcriber = self.transcriber
+                            self.processing_thread.refiner = self.refiner
+                            self.tray.show_notification("Riff", "API key configured! Ready to record.")
+                            logging.info("[ConfigMonitor] Components initialized successfully")
+                        except Exception as e:
+                            logging.error(f"[ConfigMonitor] Failed to initialize components: {e}")
+                            self.tray.show_notification("Error", f"Invalid API key: {e}")
 
             except Exception as e:
                 logging.error(f"Error in config monitor: {e}")
@@ -910,24 +952,17 @@ def launch_settings_app(config):
 def main():
     # 1. Load Config
     config = ConfigManager()
-    
+
     # 2. Check for First Run / Missing Key
     api_key = config.get("api.api_key")
     if not api_key:
         print("First run detected. Launching Riff Control Center for Onboarding...")
-        
         launch_settings_app(config)
-        
-        # Wait for key loop
-        print("Waiting for API key configuration...")
-        while not api_key:
-            time.sleep(1)
-            config.load()
-            api_key = config.get("api.api_key")
-            
-        print("API Key found! Starting Riff...")
+        # DO NOT block here — the app will start immediately with the tray icon.
+        # When the user finishes onboarding and saves the API key, the config
+        # monitor thread detects the change and reinitializes components.
 
-    # 3. Start App
+    # 3. Start App (always — handles missing API key gracefully)
     app = RiffApp()
     app.start()
 

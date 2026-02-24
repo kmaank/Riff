@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 
+## [1.3.1] - 2026-02-24
+
+### Fixed
+- **App Unresponsive on First Run (CRITICAL)**
+  - **Problem**: On first install (no API key), the main thread was stuck in an infinite `while` loop waiting for the user to enter the API key via the Settings app. Because the app is a menu bar app (`LSUIElement=True`) with no dock icon, the user saw literally nothing — just an unresponsive process that could not be uninstalled.
+  - **Solution**: Removed the blocking loop entirely. App now starts immediately — tray icon appears, notifications work, Settings opens for onboarding. When the user saves the API key in Settings, the config monitor thread (2-second polling) detects the change and hot-initializes the transcriber and refiner. A notification confirms readiness.
+  - **Impact**: App is always responsive from the moment it launches. First-run onboarding is non-blocking.
+  - **Files Changed**: `main.py`
+
+- **Missing PyInstaller Dependencies**
+  - **Problem**: `scipy`, `numpy`, `sounddevice`, `pyperclip`, and `plyer` were not in `hiddenimports`, causing potential silent import failures in the bundled .app.
+  - **Solution**: Added all required hidden imports to `Riff.spec`.
+  - **Files Changed**: `Riff.spec`
+
 ## [1.3.0] - 2026-02-19
 
 ### Fixed
