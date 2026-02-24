@@ -15,11 +15,11 @@ class TranscriptionError(Exception):
 class Transcriber:
     # Script mode prompts for Whisper
     # Note: Constraining prompts prevent hallucinations. Be explicit about "exactly", "verbatim", "do not add".
+    # CRITICAL: Tell Whisper to output NOTHING if there's no speech to prevent hallucinations.
     SCRIPT_MODE_PROMPTS = {
-        "english_mixed": "Transcribe exactly what is spoken, word for word. Keep both English and non-English words as heard. Do not add explanations, context, or extra words. Output only the verbatim speech.",
-        "english_translated": "Transcribe the spoken audio exactly as heard, translating any non-English words to English. Output only what was actually said, without additions or explanations.",
-        # Use the same constraining prompt for original_mixed
-        "original_mixed": "Transcribe exactly what is spoken, word for word, in the original language and script. Do not add explanations or extra words. Output only the verbatim speech."
+        "english_mixed": "Transcribe exactly what is spoken, word for word. Keep both English and non-English words as heard. Do not add explanations, context, or extra words. If there is no speech or only silence/noise, output nothing. Output only the verbatim speech.",
+        "english_translated": "Transcribe the spoken audio exactly as heard, translating any non-English words to English. If there is no speech or only silence/noise, output nothing. Output only what was actually said, without additions or explanations.",
+        "original_mixed": "Transcribe exactly what is spoken, word for word, in the original language and script. Do not add explanations or extra words. If there is no speech or only silence/noise, output nothing. Output only the verbatim speech."
     }
 
     def __init__(self, api_key: str, script_mode: str = "english_mixed"):
@@ -188,6 +188,7 @@ class Transcriber:
                 "MBC News", "Amara.org", "Thank you", "Thanks",
                 "Thank you for watching", "Thank you for watching.",
                 "Thanks for watching", "Thanks for watching.",
+                "No audio", "No audio.", "no audio", "no audio.",
                 "Subtitles by", "Subtitle by", "aaa aaaa"
             ]
 
@@ -205,6 +206,7 @@ class Transcriber:
                  r"^Translated by.*",  # Translated by...
                  r"^Thanks?(\s+you)?(\s+for\s+watching)?\.?$",  # Thank(s) (you) (for watching)
                  r"^Please subscribe",     # Common YouTube outro
+                 r"^(No\s+)?audio(\s+(not\s+)?(detected|found|available))?\.?$",  # No audio (detected/found/available)
             ]
 
             for pattern in HALLUCINATION_PATTERNS:
