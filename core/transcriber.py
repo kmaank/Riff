@@ -186,9 +186,11 @@ class Transcriber:
             HALLUCINATIONS_EXACT = [
                 "you", "You", "YOU", ".", "..", "...",
                 "MBC News", "Amara.org", "Thank you", "Thanks",
+                "Thank you for watching", "Thank you for watching.",
+                "Thanks for watching", "Thanks for watching.",
                 "Subtitles by", "Subtitle by", "aaa aaaa"
             ]
-            
+
             if text in HALLUCINATIONS_EXACT or not text:
                 logging.warning(f"[Transcriber] Filtered exact hallucination: '{text}'")
                 print(f"[Filtered Hallucination (Exact): '{text}']")
@@ -201,7 +203,7 @@ class Transcriber:
                  r"^\(.*\)$",          # Pure parenthetical: (Applause), (Music)
                  r"^Subtitle.*",       # Subtitle by...
                  r"^Translated by.*",  # Translated by...
-                 r"^Thanks for watching",  # Common YouTube outro
+                 r"^Thanks?(\s+you)?(\s+for\s+watching)?\.?$",  # Thank(s) (you) (for watching)
                  r"^Please subscribe",     # Common YouTube outro
             ]
 

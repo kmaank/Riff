@@ -42,7 +42,7 @@ struct KeysView: View {
                     }
                 }
                 .padding()
-                .background(Color(nsColor: .controlBackgroundColor))
+                .background(Color.gray.opacity(0.08))
                 .cornerRadius(10)
 
                 VStack(alignment: .leading, spacing: 10) {
@@ -64,7 +64,7 @@ struct KeysView: View {
                     }
                 }
                 .padding()
-                .background(Color(nsColor: .controlBackgroundColor))
+                .background(Color.gray.opacity(0.08))
                 .cornerRadius(10)
 
                 // Permissions Section
@@ -95,7 +95,7 @@ struct KeysView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding()
-                .background(Color(nsColor: .controlBackgroundColor))
+                .background(Color.gray.opacity(0.08))
                 .cornerRadius(10)
 
                 Spacer()

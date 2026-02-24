@@ -66,7 +66,7 @@ struct HistoryRow: View {
                 .lineLimit(3)
         }
         .padding(10)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(Color.gray.opacity(0.08))
         .cornerRadius(8)
         .onTapGesture {
             NSPasteboard.general.clearContents()

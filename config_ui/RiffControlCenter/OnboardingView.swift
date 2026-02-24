@@ -203,7 +203,7 @@ struct OnboardingView: View {
                 }
                 .font(.system(size: 13))
                 .padding()
-                .background(Color.gray.opacity(0.1))
+                .background(Color.gray.opacity(0.08))
                 .cornerRadius(8)
                 .frame(maxWidth: .infinity)
                 .multilineTextAlignment(.center)
@@ -406,12 +406,12 @@ struct ScriptModeOnboardingCard: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(isSelected ? color : Color(nsColor: .controlBackgroundColor))
+                    .fill(isSelected ? color : Color.gray.opacity(0.08))
                     .shadow(color: .black.opacity(isSelected ? 0.2 : 0.05), radius: isSelected ? 6 : 2, x: 0, y: isSelected ? 3 : 1)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
-                    .stroke(isSelected ? color.opacity(0.0) : Color.gray.opacity(0.2), lineWidth: 1)
+                    .stroke(isSelected ? color.opacity(0.0) : Color.gray.opacity(0.15), lineWidth: 1)
             )
         }
         .buttonStyle(.plain)

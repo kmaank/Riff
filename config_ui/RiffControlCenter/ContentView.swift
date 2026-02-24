@@ -41,7 +41,7 @@ struct ContentView: View {
                 }
                 .padding()
                 .frame(width: 180)
-                .background(Color(nsColor: .controlBackgroundColor))
+                .background(Color(nsColor: .windowBackgroundColor).opacity(0.5))
 
                 // Main Content
                 VStack {

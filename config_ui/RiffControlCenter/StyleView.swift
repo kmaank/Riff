@@ -81,12 +81,12 @@ struct StyleCard: View {
             .frame(height: 100)
             .background(
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(isSelected ? color : Color(nsColor: .controlBackgroundColor))
+                    .fill(isSelected ? color : Color.gray.opacity(0.08))
                     .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
-                    .stroke(isSelected ? color.opacity(0.0) : Color.gray.opacity(0.2), lineWidth: 1)
+                    .stroke(isSelected ? color.opacity(0.0) : Color.gray.opacity(0.15), lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
