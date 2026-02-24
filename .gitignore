@@ -10,3 +10,13 @@ venv/
 .env
 .idea/
 .vscode/
+
+# Windows-specific (local dev only, not for git)
+requirements_windows.txt
+Riff_windows.spec
+build_app.ps1
+assets/AppIcon.ico
+
+# Temp files
+*.wav
+__MACOSX/
