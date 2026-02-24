@@ -185,9 +185,7 @@ struct OnboardingView: View {
                 // Note: Keeping the UI focused on interactions that require explicit system settings.
                 // Microphone will be asked on-demand during Test Drive.
 
-                // 2. Accessibility & Input
-                VStack(alignment: .center, spacing: 10) {
-                // 1. Accessibility & Input
+                // Accessibility & Input
                 VStack(alignment: .center, spacing: 10) {
                     Text("1. Accessibility & Input Monitoring")
                         .font(.headline)

@@ -12,7 +12,7 @@ on:
 jobs:
   build-macos:
     runs-on: macos-14  # Apple Silicon (M1) runner
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -31,7 +31,7 @@ jobs:
       - name: Build Control Center (Swift UI)
         run: |
           chmod +x config_ui/build_ui.sh
-          cd config_ui && bash build_ui.sh && cd ..
+          bash config_ui/build_ui.sh
           echo "--- Control Center build output ---"
           ls -la config_ui/build/ || echo "No build dir"
           ls -la config_ui/build/RiffControlCenter.app/Contents/MacOS/ || echo "No binary"
@@ -40,13 +40,28 @@ jobs:
         run: |
           # Clean previous builds
           rm -rf build dist
-          
+
+          # Fix executable permissions on embedded Control Center binary
+          # (PyInstaller strips +x from data files; restore it before bundling)
+          RIFFCC_BIN="config_ui/build/RiffControlCenter.app/Contents/MacOS/RiffControlCenter"
+          if [ -f "$RIFFCC_BIN" ]; then
+            chmod +x "$RIFFCC_BIN"
+            echo "Restored +x on $RIFFCC_BIN"
+          fi
+
           # Run PyInstaller with the macOS spec
           pyinstaller --clean --noconfirm Riff.spec
-          
+
           echo "--- Build output ---"
           ls -la dist/
           ls -la dist/Riff.app/ || echo "No Riff.app found"
+
+          # Restore +x inside the packaged .app bundle as well
+          BUNDLED_BIN="dist/Riff.app/Contents/Resources/RiffControlCenter.app/Contents/MacOS/RiffControlCenter"
+          if [ -f "$BUNDLED_BIN" ]; then
+            chmod +x "$BUNDLED_BIN"
+            echo "Restored +x on bundled binary: $BUNDLED_BIN"
+          fi
 
       - name: Create DMG
         run: |
@@ -56,36 +71,53 @@ jobs:
           DMG_NAME="$APP_NAME.dmg"
           DMG_PATH="$DIST_DIR/$DMG_NAME"
           SOURCE_FOLDER="dmg_source"
-          
+
           # Check if app exists
           if [ ! -d "$APP_PATH" ]; then
             echo "Warning: $APP_PATH not found, skipping DMG creation"
             exit 0
           fi
-          
+
           # Prepare DMG source
           rm -rf "$SOURCE_FOLDER"
           mkdir "$SOURCE_FOLDER"
           cp -R "$APP_PATH" "$SOURCE_FOLDER/"
-          
+
           # Copy fix script if exists
           if [ -f "fix_echoflow.command" ]; then
             cp "fix_echoflow.command" "$SOURCE_FOLDER/"
             chmod +x "$SOURCE_FOLDER/fix_echoflow.command"
           fi
-          
+
           # Create Applications symlink
           ln -s /Applications "$SOURCE_FOLDER/Applications"
-          
+
           # Clean quarantine attributes
           xattr -cr "$SOURCE_FOLDER/$APP_NAME.app" 2>/dev/null || true
-          
-          # Create DMG
-          hdiutil create -volname "$APP_NAME" -srcfolder "$SOURCE_FOLDER" -ov -format UDZO "$DMG_PATH"
-          
+
+          # Wait for macOS Spotlight/indexing to release file handles
+          # (hdiutil: create failed - Resource busy is a known GitHub Actions flakiness)
+          sleep 5
+
+          # Create DMG with retry logic
+          for attempt in 1 2 3; do
+            echo "DMG creation attempt $attempt..."
+            if hdiutil create -volname "$APP_NAME" -srcfolder "$SOURCE_FOLDER" -ov -format UDZO "$DMG_PATH"; then
+              echo "DMG created successfully on attempt $attempt"
+              break
+            else
+              if [ "$attempt" -eq 3 ]; then
+                echo "All DMG creation attempts failed"
+                exit 1
+              fi
+              echo "Attempt $attempt failed, waiting 10s before retry..."
+              sleep 10
+            fi
+          done
+
           # Cleanup
           rm -rf "$SOURCE_FOLDER"
-          
+
           echo "--- DMG created ---"
           ls -lh "$DMG_PATH"
 

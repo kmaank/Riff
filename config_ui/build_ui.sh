@@ -1,4 +1,5 @@
 # config_ui/build_ui.sh
+set -e  # Exit immediately if any command fails (e.g. swiftc compilation error)
 
 # Change to script directory
 cd "$(dirname "$0")"
