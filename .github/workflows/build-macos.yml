@@ -1,0 +1,106 @@
+name: Build macOS App
+
+on:
+  # Trigger on push to the claude branch
+  push:
+    branches:
+      - 'claude/**'
+      - 'main'
+  # Allow manual trigger from GitHub UI
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    runs-on: macos-14  # Apple Silicon (M1) runner
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build Control Center (Swift UI)
+        run: |
+          chmod +x config_ui/build_ui.sh
+          cd config_ui && bash build_ui.sh && cd ..
+          echo "--- Control Center build output ---"
+          ls -la config_ui/build/ || echo "No build dir"
+          ls -la config_ui/build/RiffControlCenter.app/Contents/MacOS/ || echo "No binary"
+
+      - name: Build Riff.app with PyInstaller
+        run: |
+          # Clean previous builds
+          rm -rf build dist
+          
+          # Run PyInstaller with the macOS spec
+          pyinstaller --clean --noconfirm Riff.spec
+          
+          echo "--- Build output ---"
+          ls -la dist/
+          ls -la dist/Riff.app/ || echo "No Riff.app found"
+
+      - name: Create DMG
+        run: |
+          APP_NAME="Riff"
+          DIST_DIR="dist"
+          APP_PATH="$DIST_DIR/$APP_NAME.app"
+          DMG_NAME="$APP_NAME.dmg"
+          DMG_PATH="$DIST_DIR/$DMG_NAME"
+          SOURCE_FOLDER="dmg_source"
+          
+          # Check if app exists
+          if [ ! -d "$APP_PATH" ]; then
+            echo "Warning: $APP_PATH not found, skipping DMG creation"
+            exit 0
+          fi
+          
+          # Prepare DMG source
+          rm -rf "$SOURCE_FOLDER"
+          mkdir "$SOURCE_FOLDER"
+          cp -R "$APP_PATH" "$SOURCE_FOLDER/"
+          
+          # Copy fix script if exists
+          if [ -f "fix_echoflow.command" ]; then
+            cp "fix_echoflow.command" "$SOURCE_FOLDER/"
+            chmod +x "$SOURCE_FOLDER/fix_echoflow.command"
+          fi
+          
+          # Create Applications symlink
+          ln -s /Applications "$SOURCE_FOLDER/Applications"
+          
+          # Clean quarantine attributes
+          xattr -cr "$SOURCE_FOLDER/$APP_NAME.app" 2>/dev/null || true
+          
+          # Create DMG
+          hdiutil create -volname "$APP_NAME" -srcfolder "$SOURCE_FOLDER" -ov -format UDZO "$DMG_PATH"
+          
+          # Cleanup
+          rm -rf "$SOURCE_FOLDER"
+          
+          echo "--- DMG created ---"
+          ls -lh "$DMG_PATH"
+
+      - name: Upload Riff.app as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Riff-macOS-app
+          path: dist/Riff.app
+          retention-days: 30
+
+      - name: Upload DMG as artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Riff-macOS-dmg
+          path: dist/Riff.dmg
+          retention-days: 30
+          if-no-files-found: ignore
