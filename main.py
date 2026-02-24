@@ -717,7 +717,9 @@ class RiffApp:
         # 1. Our tracked process
         if self.control_center_process is not None:
             if self.control_center_process.poll() is None:
+                logging.debug("[CCCheck] Tracked process is running")
                 return True
+            logging.debug("[CCCheck] Tracked process exited, clearing handle")
             self.control_center_process = None  # Process exited, clear handle
 
         # 2. System-wide check (catches any other launch path)
@@ -726,8 +728,11 @@ class RiffApp:
                 ["pgrep", "-x", "RiffControlCenter"],
                 capture_output=True, text=True
             )
-            return result.returncode == 0
-        except Exception:
+            is_running = result.returncode == 0
+            logging.debug(f"[CCCheck] pgrep check: {is_running} (pids: {result.stdout.strip() if is_running else 'none'})")
+            return is_running
+        except Exception as e:
+            logging.debug(f"[CCCheck] pgrep failed: {e}")
             return False
 
     def _ensure_cc_watcher(self):
@@ -761,17 +766,22 @@ class RiffApp:
 
     def open_settings(self):
         try:
+            logging.info("[Settings] open_settings() called")
+
             # System-wide check: covers CC opened via onboarding, manual open,
             # or a previous tray launch. Prevents duplicate windows.
             if self._is_control_center_running():
-                logging.info("Control Center already running, bringing to front")
+                logging.info("[Settings] Control Center already running, bringing to front")
                 try:
                     subprocess.call(["osascript", "-e", 'tell application "RiffControlCenter" to activate'])
+                    logging.info("[Settings] Successfully activated existing CC window")
                 except Exception as e:
-                    logging.warning(f"Failed to activate Control Center window: {e}")
+                    logging.warning(f"[Settings] Failed to activate Control Center window: {e}")
                 # Make sure the watcher is running even if we didn't launch CC
                 self._ensure_cc_watcher()
                 return
+
+            logging.info("[Settings] No running CC detected, launching new instance")
 
             # Find Control Center app path
             if getattr(sys, 'frozen', False):
@@ -792,14 +802,15 @@ class RiffApp:
             else:
                 app_path = os.path.join(os.getcwd(), "config_ui", "build", "RiffControlCenter.app")
 
-            logging.info(f"Launching settings app at: {app_path}")
+            logging.info(f"[Settings] Launching settings app at: {app_path}")
             if os.path.exists(app_path):
                 binary_path = os.path.join(app_path, "Contents", "MacOS", "RiffControlCenter")
+                logging.info(f"[Settings] Binary path: {binary_path}, exists: {os.path.exists(binary_path)}")
                 if os.path.exists(binary_path):
                     # Ensure execution permissions persist (PyInstaller strips them from datas)
                     os.chmod(binary_path, os.stat(binary_path).st_mode | stat.S_IEXEC)
                     self.control_center_process = subprocess.Popen([binary_path])
-                    logging.info(f"Control Center launched with PID: {self.control_center_process.pid}")
+                    logging.info(f"[Settings] Control Center launched with PID: {self.control_center_process.pid}")
 
                     # Bring window to front after brief init delay
                     time.sleep(0.3)
@@ -810,14 +821,16 @@ class RiffApp:
 
                     # Watch CC - quit tray if user closes CC from dock
                     self._ensure_cc_watcher()
+                    logging.info("[Settings] Watcher started, Settings launch complete")
                 else:
+                    logging.warning(f"[Settings] Binary not found, using 'open -a' fallback")
                     subprocess.call(["open", "-a", app_path])
             else:
-                logging.error(f"Settings app not found at {app_path}")
+                logging.error(f"[Settings] Settings app not found at {app_path}")
                 subprocess.call(["open", self.config.config_path])
 
         except Exception as e:
-            logging.error(f"Could not open settings: {e}")
+            logging.error(f"[Settings] Could not open settings: {e}", exc_info=True)
 
     def open_instructions(self):
         try:
@@ -919,12 +932,16 @@ class RiffApp:
         os._exit(0)
 
 
-def launch_settings_app(config):
+def launch_settings_app(config, app_instance=None):
+    """
+    Launch Control Center during onboarding (before app is fully initialized).
+    If app_instance is provided, track the process and start the watcher.
+    """
     try:
         if getattr(sys, 'frozen', False):
             candidates = []
             exe_dir = os.path.dirname(sys.executable)
-            
+
             candidates.append(os.path.abspath(os.path.join(exe_dir, "..", "Resources", "RiffControlCenter.app")))
             if hasattr(sys, '_MEIPASS'):
                 candidates.append(os.path.join(sys._MEIPASS, "RiffControlCenter.app"))
@@ -938,21 +955,37 @@ def launch_settings_app(config):
                     break
         else:
             app_path = os.path.join(os.getcwd(), "config_ui", "build", "RiffControlCenter.app")
-        
-            logging.info(f"Launching settings app at: {app_path}")
+
+        logging.info(f"Launching settings app at: {app_path}")
         if os.path.exists(app_path):
             binary_path = os.path.join(app_path, "Contents", "MacOS", "RiffControlCenter")
             if os.path.exists(binary_path):
                 # Ensure execution permissions persist (PyInstaller strips them from datas)
                 os.chmod(binary_path, os.stat(binary_path).st_mode | stat.S_IEXEC)
-                
-            # Use 'open' directly on the path without '-a' to force opening this specific bundle
-            # '-a' often resolves to registered applications (which might be old versions in /Applications)
-            subprocess.call(["open", app_path])
+
+                # Launch via binary path and track the process if app_instance available
+                if app_instance:
+                    app_instance.control_center_process = subprocess.Popen([binary_path])
+                    logging.info(f"Control Center launched with tracked PID: {app_instance.control_center_process.pid}")
+
+                    # Bring window to front after brief init delay
+                    time.sleep(0.3)
+                    try:
+                        subprocess.call(["osascript", "-e", 'tell application "RiffControlCenter" to activate'])
+                    except Exception as e:
+                        logging.warning(f"Failed to activate Control Center window: {e}")
+
+                    # Start watcher to quit tray if user closes CC from dock
+                    app_instance._ensure_cc_watcher()
+                else:
+                    # Fallback: use 'open' without tracking (onboarding before app init)
+                    subprocess.call(["open", app_path])
+            else:
+                subprocess.call(["open", "-a", app_path])
         else:
             logging.error(f"Settings app not found at {app_path}")
             subprocess.call(["open", config.config_path])
-            
+
     except Exception as e:
         logging.error(f"Could not open settings: {e}")
 

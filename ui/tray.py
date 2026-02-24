@@ -93,7 +93,7 @@ class SystemTray:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("How to Use (Instructions)", self._on_instructions_click),
             pystray.MenuItem("Permissions ▸", self._create_permissions_menu()),
-            pystray.MenuItem("Settings", self.on_settings),
+            pystray.MenuItem("Settings", self._on_settings_click),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("⚠️ Force Reset (If Stuck)", self._on_force_reset_click),
             pystray.MenuItem("Quit", self._quit)
@@ -122,6 +122,11 @@ class SystemTray:
         logging.warning("Tray: Force Reset clicked")
         if self.on_force_reset:
             self.on_force_reset()
+
+    def _on_settings_click(self, icon, item):
+        logging.info("Tray: Settings clicked")
+        if self.on_settings:
+            threading.Thread(target=self.on_settings, daemon=True).start()
 
     def _quit(self):
         logging.info("Tray: Quit clicked")
