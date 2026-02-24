@@ -7,6 +7,7 @@ import time
 import subprocess
 import queue
 import sys
+import stat
 from datetime import datetime
 
 from pynput import keyboard
@@ -795,6 +796,8 @@ class RiffApp:
             if os.path.exists(app_path):
                 binary_path = os.path.join(app_path, "Contents", "MacOS", "RiffControlCenter")
                 if os.path.exists(binary_path):
+                    # Ensure execution permissions persist (PyInstaller strips them from datas)
+                    os.chmod(binary_path, os.stat(binary_path).st_mode | stat.S_IEXEC)
                     self.control_center_process = subprocess.Popen([binary_path])
                     logging.info(f"Control Center launched with PID: {self.control_center_process.pid}")
 
@@ -938,6 +941,11 @@ def launch_settings_app(config):
         
             logging.info(f"Launching settings app at: {app_path}")
         if os.path.exists(app_path):
+            binary_path = os.path.join(app_path, "Contents", "MacOS", "RiffControlCenter")
+            if os.path.exists(binary_path):
+                # Ensure execution permissions persist (PyInstaller strips them from datas)
+                os.chmod(binary_path, os.stat(binary_path).st_mode | stat.S_IEXEC)
+                
             # Use 'open' directly on the path without '-a' to force opening this specific bundle
             # '-a' often resolves to registered applications (which might be old versions in /Applications)
             subprocess.call(["open", app_path])
