@@ -30,6 +30,14 @@ class ConfigManager:
         "ui": {
             "show_notifications": True,
             "play_sounds": False
+        },
+        "metrics": {
+            "total_words": 0,
+            "total_riffs": 0,
+            "total_recording_seconds": 0,
+            "this_week_riffs": 0,
+            "week_start_date": "",  # ISO date for tracking weekly reset
+            "style_counts": {}  # Track usage per style
         }
     }
 
@@ -143,6 +151,48 @@ class ConfigManager:
         val = self.get("style.active_style", "casual")
         print(f"[DEBUG] get_style called. Found: {val}")
         return val
+
+    def update_metrics(self, word_count: int, recording_seconds: float, style: str):
+        """Update usage metrics after a successful transcription."""
+        from datetime import datetime, timedelta
+
+        # Ensure metrics exist (for older configs)
+        if "metrics" not in self.config:
+            self.config["metrics"] = self.DEFAULT_CONFIG["metrics"].copy()
+
+        metrics = self.config["metrics"]
+
+        # Check if we need to reset weekly count
+        today = datetime.now().date()
+        week_start_str = metrics.get("week_start_date", "")
+
+        if week_start_str:
+            try:
+                week_start = datetime.fromisoformat(week_start_str).date()
+                # If more than 7 days have passed, reset
+                if (today - week_start).days >= 7:
+                    metrics["this_week_riffs"] = 0
+                    metrics["week_start_date"] = today.isoformat()
+            except:
+                # Invalid date, reset
+                metrics["week_start_date"] = today.isoformat()
+        else:
+            # First time, set week start
+            metrics["week_start_date"] = today.isoformat()
+
+        # Update metrics
+        metrics["total_words"] = metrics.get("total_words", 0) + word_count
+        metrics["total_riffs"] = metrics.get("total_riffs", 0) + 1
+        metrics["total_recording_seconds"] = metrics.get("total_recording_seconds", 0) + recording_seconds
+        metrics["this_week_riffs"] = metrics.get("this_week_riffs", 0) + 1
+
+        # Track style usage
+        if "style_counts" not in metrics:
+            metrics["style_counts"] = {}
+        metrics["style_counts"][style] = metrics["style_counts"].get(style, 0) + 1
+
+        self.config["metrics"] = metrics
+        self.save()
 
     def get_prompt(self, style):
         # 1. Check for user override in config.json

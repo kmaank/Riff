@@ -228,10 +228,15 @@ class ProcessingThread(threading.Thread):
         script_mode = self.transcriber.script_mode if self.transcriber else "unknown"
         self.history_manager.add_entry(raw_text, refined_text, style, script_mode)
 
-        # 5. Type/Inject
+        # 5. Update Metrics
+        word_count = len(refined_text.split())
+        self.config_manager.update_metrics(word_count, duration_sec, style)
+        logging.info(f"[Metrics] Updated: +{word_count} words, +{duration_sec:.1f}s, style={style}")
+
+        # 6. Type/Inject
         self.injector.inject(refined_text)
-        
-        # 6. Notify
+
+        # 7. Notify
         if used_fallback:
             self.notification_callback("Riff Complete", "Converted (Raw Fallback)")
             log_activity(f"Success: Transcribed & Pasted (Raw Fallback). Text length: {len(refined_text)}")

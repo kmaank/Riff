@@ -8,6 +8,7 @@ struct Config: Codable {
     var style: StyleConfig
     var script_mode: ScriptModeConfig
     var onboarding_completed: Bool? = false
+    var metrics: MetricsConfig? = nil
 }
 
 struct AudioConfig: Codable {
@@ -30,6 +31,15 @@ struct StyleConfig: Codable {
 
 struct ScriptModeConfig: Codable {
     var active_mode: String
+}
+
+struct MetricsConfig: Codable {
+    var total_words: Int
+    var total_riffs: Int
+    var total_recording_seconds: Double
+    var this_week_riffs: Int
+    var week_start_date: String
+    var style_counts: [String: Int]
 }
 
 struct HistoryEntry: Codable, Identifiable {
@@ -106,6 +116,7 @@ class SettingsManager: ObservableObject {
     func startHistoryTimer() {
         Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
             self.loadHistory()
+            self.loadConfig()  // Also reload config to get updated metrics
         }
     }
 }
