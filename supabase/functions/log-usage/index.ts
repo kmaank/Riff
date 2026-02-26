@@ -1,117 +1,74 @@
-/**
- * log-usage Edge Function
- * Logs riff usage (word count, recording seconds, style)
- * Called after each successful transcription
- */
+// Edge Function: log-usage
+// Logs a riff (usage tracking) after successful transcription
 
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { getSupabaseServiceClient } from "../_shared/clients.ts";
-import {
-  authenticateUser,
-  corsHeaders,
-  handleCors,
-  jsonResponse,
-  errorResponse,
-  verifyRequestSignature,
-  getClientIp,
-} from "../_shared/auth.ts";
-import type { LogUsageResponse, MonthlyUsage } from "../_shared/types.ts";
+import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import { getSupabaseClient, getUserId, corsHeaders } from '../_shared/clients.ts';
+
+interface LogUsageRequest {
+  word_count: number;
+  recording_seconds: number;
+  style?: string;
+  script_mode?: string;
+}
 
 serve(async (req) => {
-  // Handle CORS preflight
-  const corsResponse = handleCors(req);
-  if (corsResponse) return corsResponse;
+  // Handle CORS
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders });
+  }
 
   try {
-    // Authenticate user
-    const user = await authenticateUser(req);
-    const userId = user.id;
+    const supabase = getSupabaseClient(req);
+    const userId = await getUserId(supabase);
 
-    // Verify request signature (HMAC)
-    const signatureValid = await verifyRequestSignature(
-      req,
-      userId,
-      "/log-usage"
-    );
-
-    if (!signatureValid) {
-      // Log suspicious activity
-      const supabase = getSupabaseServiceClient();
-      await supabase.rpc("log_suspicious_activity", {
-        p_user_id: userId,
-        p_activity_type: "invalid_signature",
-        p_severity: "medium",
-        p_description: "Invalid HMAC signature on log-usage request",
-        p_ip_address: getClientIp(req),
-      });
-
-      return errorResponse("Invalid request signature", 403, "invalid_signature");
+    if (!userId) {
+      return new Response(
+        JSON.stringify({ error: 'Unauthorized' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
     // Parse request body
-    const body = await req.json();
-    const { word_count, recording_seconds, style, script_mode, device_id } = body;
-
-    if (
-      typeof word_count !== "number" ||
-      typeof recording_seconds !== "number" ||
-      !style
-    ) {
-      return errorResponse("Missing required fields", 400, "invalid_request");
-    }
-
-    // Get Supabase service client
-    const supabase = getSupabaseServiceClient();
-
-    // Check for concurrent usage (abuse detection)
-    const { data: concurrentUsage } = await supabase.rpc("detect_concurrent_usage", {
-      p_user_id: userId,
-    });
-
-    if (concurrentUsage === true) {
-      // Log suspicious activity
-      await supabase.rpc("log_suspicious_activity", {
-        p_user_id: userId,
-        p_activity_type: "concurrent_usage",
-        p_severity: "high",
-        p_description: "Multiple riffs within 10 seconds (potential account sharing)",
-        p_ip_address: getClientIp(req),
-        p_device_id: device_id,
-      });
+    const body: LogUsageRequest = await req.json();
+    
+    if (!body.word_count && !body.recording_seconds) {
+      return new Response(
+        JSON.stringify({ error: 'Missing required fields' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
     // Insert usage log
-    const { error: insertError } = await supabase.from("usage_logs").insert({
-      user_id: userId,
-      word_count,
-      recording_seconds,
-      style,
-      script_mode,
-    });
+    const { data, error } = await supabase
+      .from('usage_logs')
+      .insert({
+        user_id: userId,
+        word_count: body.word_count || 0,
+        recording_seconds: body.recording_seconds || 0,
+        style: body.style,
+        script_mode: body.script_mode,
+      })
+      .select()
+      .single();
 
-    if (insertError) {
-      console.error("Failed to insert usage log:", insertError);
-      return errorResponse("Failed to log usage", 500);
+    if (error) {
+      console.error('Error logging usage:', error);
+      return new Response(
+        JSON.stringify({ error: 'Failed to log usage', message: error.message }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
-    // Fetch updated monthly usage
-    const { data: usageData } = await supabase
-      .from("monthly_usage")
-      .select("*")
-      .eq("user_id", userId)
-      .single<MonthlyUsage>();
+    return new Response(
+      JSON.stringify({ success: true, log_id: data.id }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
 
-    const response: LogUsageResponse = {
-      success: true,
-      quota: {
-        riffs_used: usageData?.riffs_used || 0,
-        seconds_used: usageData?.seconds_used || 0,
-      },
-    };
-
-    return jsonResponse(response);
-  } catch (error: any) {
-    console.error("log-usage error:", error);
-    return errorResponse(error.message || "Internal server error", 500);
+  } catch (error) {
+    console.error('Error in log-usage:', error);
+    return new Response(
+      JSON.stringify({ error: 'Internal server error', message: error.message }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
   }
 });

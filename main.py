@@ -253,16 +253,13 @@ class ProcessingThread(threading.Thread):
         # Phase 2: Log usage to backend
         if self.auth_manager:
             try:
-                logged = self.auth_manager.log_usage(
+                self.auth_manager.log_usage(
                     word_count,
                     duration_sec,
                     style,
                     script_mode
                 )
-                if logged:
-                    logging.info("[Auth] Usage logged to backend successfully")
-                else:
-                    logging.warning("[Auth] Failed to log usage to backend")
+                logging.info("[Auth] Usage logged to backend")
             except Exception as e:
                 logging.warning(f"[Auth] Usage logging error (non-fatal): {e}")
 
@@ -302,13 +299,12 @@ class RiffApp:
                 self.auth_manager = AuthManager(self.config)
                 logging.info(f"[Auth] AuthManager initialized. Authenticated: {self.auth_manager.is_authenticated}")
 
-                # Register device if authenticated
+                # Validate subscription on startup
                 if self.auth_manager.is_authenticated:
-                    success, message = self.auth_manager.register_device()
-                    if success:
-                        logging.info(f"[Auth] Device registered: {message}")
-                    else:
-                        logging.warning(f"[Auth] Device registration failed: {message}")
+                    subscription = self.auth_manager.validate_subscription()
+                    tier = subscription.get("tier", "free")
+                    status = subscription.get("status", "unknown")
+                    logging.info(f"[Auth] Subscription: tier={tier}, status={status}")
             except Exception as e:
                 logging.warning(f"[Auth] Failed to initialize AuthManager: {e}")
 

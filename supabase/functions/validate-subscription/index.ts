@@ -1,94 +1,97 @@
-/**
- * validate-subscription Edge Function
- * Returns subscription status, tier, quota, and features
- * Called on app startup and periodically (every 24h)
- */
+// Edge Function: validate-subscription
+// Returns user's subscription tier, status, quota, and features
 
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { getSupabaseServiceClient } from "../_shared/clients.ts";
-import {
-  authenticateUser,
-  corsHeaders,
-  handleCors,
-  jsonResponse,
-  errorResponse,
-} from "../_shared/auth.ts";
-import {
-  getTierConfig,
-  checkQuota,
-} from "../_shared/tier-limits.ts";
-import type {
-  Subscription,
-  MonthlyUsage,
-  ValidateSubscriptionResponse,
-} from "../_shared/types.ts";
+import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import { getSupabaseClient, getUserId, corsHeaders } from '../_shared/clients.ts';
+import { getTierFeatures } from '../_shared/tier-limits.ts';
 
 serve(async (req) => {
-  // Handle CORS preflight
-  const corsResponse = handleCors(req);
-  if (corsResponse) return corsResponse;
+  // Handle CORS
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders });
+  }
 
   try {
-    // Authenticate user
-    const user = await authenticateUser(req);
-    const userId = user.id;
+    const supabase = getSupabaseClient(req);
+    const userId = await getUserId(supabase);
 
-    // Get Supabase service client
-    const supabase = getSupabaseServiceClient();
-
-    // Fetch subscription
-    const { data: subscription, error: subError } = await supabase
-      .from("subscriptions")
-      .select("*")
-      .eq("user_id", userId)
-      .single<Subscription>();
-
-    if (subError || !subscription) {
-      return errorResponse("Subscription not found", 404, "subscription_not_found");
+    if (!userId) {
+      return new Response(
+        JSON.stringify({ error: 'Unauthorized' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
-    // Fetch monthly usage
-    const { data: usageData, error: usageError } = await supabase
-      .from("monthly_usage")
-      .select("*")
-      .eq("user_id", userId)
-      .single<MonthlyUsage>();
+    // Get subscription info
+    const { data: subscription, error: subError } = await supabase
+      .from('subscriptions')
+      .select('tier, status, current_period_end')
+      .eq('user_id', userId)
+      .single();
 
-    // Default to zero usage if no data
-    const riffsUsed = usageData?.riffs_used || 0;
-    const secondsUsed = usageData?.seconds_used || 0;
+    if (subError || !subscription) {
+      return new Response(
+        JSON.stringify({ error: 'Subscription not found' }),
+        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
 
-    // Get tier config
-    const tierConfig = getTierConfig(subscription.tier);
+    // Get monthly usage
+    const { data: usage, error: usageError } = await supabase
+      .from('monthly_usage')
+      .select('riffs_used, seconds_used')
+      .eq('user_id', userId)
+      .single();
 
-    // Check if subscription is valid
-    const isValid =
-      subscription.status === "active" &&
-      !checkQuota(subscription.tier, riffsUsed, secondsUsed).exceeded;
+    const riffsUsed = usage?.riffs_used || 0;
+    const secondsUsed = usage?.seconds_used || 0;
+
+    // Get tier features and limits
+    const features = getTierFeatures(subscription.tier);
+
+    // Check if managed key is available (for paid tiers)
+    let managedKeyAvailable = false;
+    if (!features.byok) {
+      const { data: apiKey } = await supabase
+        .from('api_keys')
+        .select('is_active')
+        .eq('user_id', userId)
+        .single();
+      
+      managedKeyAvailable = apiKey?.is_active || false;
+    }
 
     // Build response
-    const response: ValidateSubscriptionResponse = {
-      valid: isValid,
+    const response = {
+      valid: subscription.status === 'active',
       tier: subscription.tier,
       status: subscription.status,
       quota: {
-        riffs_limit: tierConfig.riffs_limit,
+        riffs_limit: features.riffs_limit,
         riffs_used: riffsUsed,
-        seconds_limit: tierConfig.seconds_limit,
+        seconds_limit: features.seconds_limit,
         seconds_used: secondsUsed,
       },
       features: {
-        all_styles: tierConfig.all_styles,
-        custom_prompts: tierConfig.custom_prompts,
-        priority: tierConfig.priority,
-        byok: tierConfig.byok,
+        all_styles: features.all_styles,
+        custom_prompts: features.custom_prompts,
+        priority: features.priority,
+        byok: features.byok,
       },
-      managed_key_available: !tierConfig.byok,
+      managed_key_available: managedKeyAvailable,
+      current_period_end: subscription.current_period_end,
     };
 
-    return jsonResponse(response);
-  } catch (error: any) {
-    console.error("validate-subscription error:", error);
-    return errorResponse(error.message || "Internal server error", 500);
+    return new Response(
+      JSON.stringify(response),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+
+  } catch (error) {
+    console.error('Error validating subscription:', error);
+    return new Response(
+      JSON.stringify({ error: 'Internal server error', message: error.message }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
   }
 });

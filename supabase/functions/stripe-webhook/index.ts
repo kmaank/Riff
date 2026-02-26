@@ -1,217 +1,163 @@
-/**
- * stripe-webhook Edge Function
- * Handles Stripe webhook events for subscription lifecycle
- * Updates subscriptions table based on payment events
- */
+// Edge Function: stripe-webhook
+// Handles Stripe webhook events (payment success, subscription changes)
 
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { getSupabaseServiceClient, getStripeClient } from "../_shared/clients.ts";
-import { corsHeaders, jsonResponse, errorResponse } from "../_shared/auth.ts";
-import type Stripe from "https://esm.sh/stripe@14.10.0";
+import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import { getSupabaseClient, getStripeClient, corsHeaders } from '../_shared/clients.ts';
 
 serve(async (req) => {
   try {
-    const signature = req.headers.get("stripe-signature");
-
-    if (!signature) {
-      return errorResponse("Missing stripe-signature header", 400);
-    }
-
-    const webhookSecret = Deno.env.get("STRIPE_WEBHOOK_SECRET");
-    if (!webhookSecret) {
-      throw new Error("Missing STRIPE_WEBHOOK_SECRET");
-    }
-
     const stripe = getStripeClient();
-    const body = await req.text();
+    const signature = req.headers.get('stripe-signature');
+    const webhookSecret = Deno.env.get('STRIPE_WEBHOOK_SECRET');
+
+    if (!signature || !webhookSecret) {
+      return new Response('Missing signature or secret', { status: 400 });
+    }
 
     // Verify webhook signature
-    let event: Stripe.Event;
+    const body = await req.text();
+    let event;
+
     try {
       event = await stripe.webhooks.constructEventAsync(
         body,
         signature,
         webhookSecret
       );
-    } catch (err: any) {
-      console.error("Webhook signature verification failed:", err.message);
-      return errorResponse("Invalid signature", 400);
+    } catch (err) {
+      console.error('Webhook signature verification failed:', err.message);
+      return new Response('Invalid signature', { status: 400 });
     }
 
-    console.log(`Processing Stripe event: ${event.type}`);
-
-    const supabase = getSupabaseServiceClient();
+    // Get service role Supabase client (bypasses RLS)
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     // Handle different event types
     switch (event.type) {
-      case "checkout.session.completed": {
-        const session = event.data.object as Stripe.Checkout.Session;
+      case 'checkout.session.completed': {
+        const session = event.data.object;
         const userId = session.metadata?.user_id;
         const tier = session.metadata?.tier;
 
         if (!userId || !tier) {
-          console.error("Missing metadata in checkout session");
+          console.error('Missing metadata in checkout session');
           break;
         }
 
         // Update subscription
-        const updateData: any = {
+        const updates: any = {
           tier,
-          status: "active",
-          stripe_customer_id: session.customer as string,
-          updated_at: new Date().toISOString(),
+          status: 'active',
         };
 
-        // For recurring subscriptions, add subscription ID and period
-        if (session.subscription) {
-          updateData.stripe_subscription_id = session.subscription as string;
-
-          // Fetch subscription details for period dates
-          const subscription = await stripe.subscriptions.retrieve(
-            session.subscription as string
-          );
-          updateData.current_period_start = new Date(
-            subscription.current_period_start * 1000
-          ).toISOString();
-          updateData.current_period_end = new Date(
-            subscription.current_period_end * 1000
-          ).toISOString();
-        } else {
-          // Lifetime purchase (no subscription)
-          updateData.stripe_subscription_id = null;
-          updateData.current_period_start = null;
-          updateData.current_period_end = null;
+        if (tier !== 'lifetime') {
+          updates.stripe_subscription_id = session.subscription;
+          updates.current_period_start = new Date(session.created * 1000).toISOString();
         }
 
-        const { error } = await supabase
-          .from("subscriptions")
-          .update(updateData)
-          .eq("user_id", userId);
+        await supabase
+          .from('subscriptions')
+          .update(updates)
+          .eq('user_id', userId);
 
-        if (error) {
-          console.error("Failed to update subscription:", error);
-        } else {
-          console.log(`Subscription upgraded to ${tier} for user ${userId}`);
+        // Provision managed API key for paid tiers
+        if (tier !== 'free') {
+          await provisionManagedKey(supabase, userId, tier);
         }
 
+        console.log(`Checkout completed for user ${userId}, tier ${tier}`);
         break;
       }
 
-      case "invoice.payment_succeeded": {
-        const invoice = event.data.object as Stripe.Invoice;
-        const subscriptionId = invoice.subscription as string;
+      case 'customer.subscription.updated': {
+        const subscription = event.data.object;
+        const customerId = subscription.customer;
 
-        if (!subscriptionId) break;
+        // Find user by customer ID
+        const { data: sub } = await supabase
+          .from('subscriptions')
+          .select('user_id')
+          .eq('stripe_customer_id', customerId)
+          .single();
 
-        // Fetch subscription details
-        const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+        if (!sub) {
+          console.error('Subscription not found for customer:', customerId);
+          break;
+        }
 
-        // Update subscription period
-        const { error } = await supabase
-          .from("subscriptions")
+        // Update subscription status and period
+        await supabase
+          .from('subscriptions')
           .update({
-            status: "active",
-            current_period_start: new Date(
-              subscription.current_period_start * 1000
-            ).toISOString(),
-            current_period_end: new Date(
-              subscription.current_period_end * 1000
-            ).toISOString(),
-            updated_at: new Date().toISOString(),
+            status: subscription.status,
+            current_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
+            current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
           })
-          .eq("stripe_subscription_id", subscriptionId);
+          .eq('user_id', sub.user_id);
 
-        if (error) {
-          console.error("Failed to update subscription on payment success:", error);
-        } else {
-          console.log(`Subscription renewed: ${subscriptionId}`);
-        }
-
+        console.log(`Subscription updated for customer ${customerId}`);
         break;
       }
 
-      case "invoice.payment_failed": {
-        const invoice = event.data.object as Stripe.Invoice;
-        const subscriptionId = invoice.subscription as string;
+      case 'customer.subscription.deleted': {
+        const subscription = event.data.object;
+        const customerId = subscription.customer;
 
-        if (!subscriptionId) break;
+        // Find user
+        const { data: sub } = await supabase
+          .from('subscriptions')
+          .select('user_id')
+          .eq('stripe_customer_id', customerId)
+          .single();
 
-        // Mark subscription as past_due
-        const { error } = await supabase
-          .from("subscriptions")
-          .update({
-            status: "past_due",
-            updated_at: new Date().toISOString(),
-          })
-          .eq("stripe_subscription_id", subscriptionId);
-
-        if (error) {
-          console.error("Failed to update subscription on payment failure:", error);
-        } else {
-          console.log(`Subscription past_due: ${subscriptionId}`);
+        if (!sub) {
+          console.error('Subscription not found for customer:', customerId);
+          break;
         }
-
-        break;
-      }
-
-      case "customer.subscription.deleted": {
-        const subscription = event.data.object as Stripe.Subscription;
 
         // Downgrade to free tier
-        const { error } = await supabase
-          .from("subscriptions")
+        await supabase
+          .from('subscriptions')
           .update({
-            tier: "free",
-            status: "expired",
+            tier: 'free',
+            status: 'expired',
             stripe_subscription_id: null,
-            current_period_start: null,
             current_period_end: null,
-            updated_at: new Date().toISOString(),
           })
-          .eq("stripe_subscription_id", subscription.id);
+          .eq('user_id', sub.user_id);
 
-        if (error) {
-          console.error("Failed to downgrade subscription:", error);
-        } else {
-          console.log(`Subscription canceled and downgraded: ${subscription.id}`);
-        }
+        // Deactivate managed key
+        await supabase
+          .from('api_keys')
+          .update({ is_active: false })
+          .eq('user_id', sub.user_id);
 
+        console.log(`Subscription canceled for customer ${customerId}`);
         break;
       }
 
-      case "customer.subscription.updated": {
-        const subscription = event.data.object as Stripe.Subscription;
+      case 'invoice.payment_failed': {
+        const invoice = event.data.object;
+        const customerId = invoice.customer;
 
-        // Update status and period
-        const status =
-          subscription.status === "active"
-            ? "active"
-            : subscription.status === "past_due"
-            ? "past_due"
-            : subscription.status === "canceled"
-            ? "canceled"
-            : "expired";
+        // Find user
+        const { data: sub } = await supabase
+          .from('subscriptions')
+          .select('user_id')
+          .eq('stripe_customer_id', customerId)
+          .single();
 
-        const { error } = await supabase
-          .from("subscriptions")
-          .update({
-            status,
-            current_period_start: new Date(
-              subscription.current_period_start * 1000
-            ).toISOString(),
-            current_period_end: new Date(
-              subscription.current_period_end * 1000
-            ).toISOString(),
-            updated_at: new Date().toISOString(),
-          })
-          .eq("stripe_subscription_id", subscription.id);
+        if (!sub) break;
 
-        if (error) {
-          console.error("Failed to update subscription:", error);
-        } else {
-          console.log(`Subscription updated: ${subscription.id} -> ${status}`);
-        }
+        // Mark as past_due
+        await supabase
+          .from('subscriptions')
+          .update({ status: 'past_due' })
+          .eq('user_id', sub.user_id);
 
+        console.log(`Payment failed for customer ${customerId}`);
         break;
       }
 
@@ -219,9 +165,47 @@ serve(async (req) => {
         console.log(`Unhandled event type: ${event.type}`);
     }
 
-    return jsonResponse({ received: true });
-  } catch (error: any) {
-    console.error("stripe-webhook error:", error);
-    return errorResponse(error.message || "Internal server error", 500);
+    return new Response(JSON.stringify({ received: true }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+  } catch (error) {
+    console.error('Error in stripe-webhook:', error);
+    return new Response('Internal error', { status: 500 });
   }
 });
+
+// Helper: Provision managed API key for paid tier
+async function provisionManagedKey(supabase: any, userId: string, tier: string) {
+  // Check if key already exists
+  const { data: existing } = await supabase
+    .from('api_keys')
+    .select('id')
+    .eq('user_id', userId)
+    .single();
+
+  if (existing) {
+    // Reactivate existing key
+    await supabase
+      .from('api_keys')
+      .update({ is_active: true, tier })
+      .eq('user_id', userId);
+  } else {
+    // Create new key
+    // TODO: In production, fetch a real Groq key from pool and encrypt it
+    const managedKey = Deno.env.get('MANAGED_GROQ_API_KEY') ?? 'gsk_managed_key_placeholder';
+    
+    await supabase
+      .from('api_keys')
+      .insert({
+        user_id: userId,
+        encrypted_key: managedKey,  // TODO: Encrypt this
+        tier,
+        is_active: true,
+      });
+  }
+}
+
+// Import needed for Supabase client
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';

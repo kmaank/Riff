@@ -1,102 +1,112 @@
-/**
- * create-checkout Edge Function
- * Creates a Stripe Checkout session for subscription upgrade
- * Returns checkout URL to open in browser
- */
+// Edge Function: create-checkout
+// Creates Stripe Checkout session for tier upgrades
 
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import {
-  getSupabaseServiceClient,
-  getStripeClient,
-  getStripePriceIds,
-} from "../_shared/clients.ts";
-import {
-  authenticateUser,
-  corsHeaders,
-  handleCors,
-  jsonResponse,
-  errorResponse,
-} from "../_shared/auth.ts";
-import type { CreateCheckoutResponse, Subscription } from "../_shared/types.ts";
+import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import { getSupabaseClient, getStripeClient, getUserId, corsHeaders } from '../_shared/clients.ts';
+
+interface CheckoutRequest {
+  tier: 'starter' | 'pro' | 'lifetime';
+}
 
 serve(async (req) => {
-  // Handle CORS preflight
-  const corsResponse = handleCors(req);
-  if (corsResponse) return corsResponse;
+  // Handle CORS
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders });
+  }
 
   try {
-    // Authenticate user
-    const user = await authenticateUser(req);
-    const userId = user.id;
-    const userEmail = user.email || "";
-
-    // Parse request body
-    const body = await req.json();
-    const { tier } = body; // "starter", "pro", or "lifetime"
-
-    if (!tier || !["starter", "pro", "lifetime"].includes(tier)) {
-      return errorResponse("Invalid tier. Must be starter, pro, or lifetime", 400);
-    }
-
-    // Get Stripe price ID for tier
-    const priceIds = getStripePriceIds();
-    const priceId =
-      tier === "starter"
-        ? priceIds.starter
-        : tier === "pro"
-        ? priceIds.pro
-        : priceIds.lifetime;
-
-    if (!priceId) {
-      return errorResponse(`Price ID not configured for tier: ${tier}`, 500);
-    }
-
-    // Get existing subscription to check for Stripe customer ID
-    const supabase = getSupabaseServiceClient();
-    const { data: subscription } = await supabase
-      .from("subscriptions")
-      .select("*")
-      .eq("user_id", userId)
-      .single<Subscription>();
-
+    const supabase = getSupabaseClient(req);
     const stripe = getStripeClient();
+    const userId = await getUserId(supabase);
 
-    // Determine mode (subscription vs payment)
-    const mode = tier === "lifetime" ? "payment" : "subscription";
-
-    // Create Stripe Checkout session
-    const session = await stripe.checkout.sessions.create({
-      customer_email: subscription?.stripe_customer_id ? undefined : userEmail,
-      customer: subscription?.stripe_customer_id || undefined,
-      mode,
-      line_items: [
-        {
-          price: priceId,
-          quantity: 1,
-        },
-      ],
-      success_url: `riff://checkout/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `riff://checkout/cancel`,
-      metadata: {
-        user_id: userId,
-        tier,
-      },
-      // Allow promotion codes
-      allow_promotion_codes: true,
-    });
-
-    if (!session.url) {
-      return errorResponse("Failed to create checkout session", 500);
+    if (!userId) {
+      return new Response(
+        JSON.stringify({ error: 'Unauthorized' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
-    const response: CreateCheckoutResponse = {
-      url: session.url,
-      session_id: session.id,
+    // Parse request
+    const body: CheckoutRequest = await req.json();
+    
+    if (!['starter', 'pro', 'lifetime'].includes(body.tier)) {
+      return new Response(
+        JSON.stringify({ error: 'Invalid tier' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Get user profile
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('email')
+      .eq('id', userId)
+      .single();
+
+    // Get or create Stripe customer
+    const { data: subscription } = await supabase
+      .from('subscriptions')
+      .select('stripe_customer_id')
+      .eq('user_id', userId)
+      .single();
+
+    let customerId = subscription?.stripe_customer_id;
+
+    if (!customerId) {
+      const customer = await stripe.customers.create({
+        email: profile?.email,
+        metadata: { user_id: userId },
+      });
+      customerId = customer.id;
+
+      // Update subscription with customer ID
+      await supabase
+        .from('subscriptions')
+        .update({ stripe_customer_id: customerId })
+        .eq('user_id', userId);
+    }
+
+    // Get price IDs from environment
+    const priceIds = {
+      starter: Deno.env.get('STRIPE_STARTER_PRICE_ID'),
+      pro: Deno.env.get('STRIPE_PRO_PRICE_ID'),
+      lifetime: Deno.env.get('STRIPE_LIFETIME_PRICE_ID'),
     };
 
-    return jsonResponse(response);
-  } catch (error: any) {
-    console.error("create-checkout error:", error);
-    return errorResponse(error.message || "Internal server error", 500);
+    const priceId = priceIds[body.tier];
+
+    if (!priceId) {
+      return new Response(
+        JSON.stringify({ error: 'Price ID not configured' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Create Checkout session
+    const mode = body.tier === 'lifetime' ? 'payment' : 'subscription';
+    
+    const session = await stripe.checkout.sessions.create({
+      customer: customerId,
+      mode,
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: `${Deno.env.get('APP_URL') || 'riff://'}?checkout=success`,
+      cancel_url: `${Deno.env.get('APP_URL') || 'riff://'}?checkout=cancel`,
+      metadata: {
+        user_id: userId,
+        tier: body.tier,
+      },
+    });
+
+    return new Response(
+      JSON.stringify({ url: session.url, session_id: session.id }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+
+  } catch (error) {
+    console.error('Error creating checkout:', error);
+    return new Response(
+      JSON.stringify({ error: 'Internal server error', message: error.message }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
   }
 });
