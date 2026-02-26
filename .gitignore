@@ -20,3 +20,13 @@ assets/AppIcon.ico
 # Temp files
 *.wav
 __MACOSX/
+
+# Supabase
+supabase/.env
+supabase/.branches
+supabase/.temp
+.supabase/
+
+# Auth cache files (contain sensitive tokens)
+auth_cache.json
+auth_state.json
