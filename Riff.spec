@@ -10,6 +10,10 @@ hiddenimports = [
     'numpy', 'scipy', 'scipy.io', 'scipy.io.wavfile', 'sounddevice',
     'pyperclip', 'plyer', 'plyer.platforms', 'plyer.platforms.macosx',
     'plyer.platforms.macosx.notification',
+    # Phase 2: Authentication modules
+    'httpx', 'httpx._client', 'httpx._config', 'httpx._models',
+    'jwt', 'jwt.algorithms',
+    'keyring', 'keyring.backends', 'keyring.backends.macOS',
 ]
 hiddenimports += collect_submodules('ui')
 

@@ -23,6 +23,14 @@ from utils.config_manager import ConfigManager
 from ui.tray import SystemTray
 from utils.permissions import PermissionManager
 
+# Phase 2: Authentication
+try:
+    from utils.auth_manager import AuthManager
+    AUTH_AVAILABLE = True
+except ImportError:
+    AUTH_AVAILABLE = False
+    logging.warning("Auth modules not available - running without subscription management")
+
 # Setup Logging
 from utils.logger import setup_logging, log_crash, log_activity
 
@@ -82,9 +90,9 @@ class HistoryManager:
 
 
 class ProcessingThread(threading.Thread):
-    def __init__(self, audio_queue, config_manager, status_callback, notification_callback, 
+    def __init__(self, audio_queue, config_manager, status_callback, notification_callback,
                  refiner=None, transcriber=None, injector=None, watchdog_callback=None,
-                 processing_done_callback=None):
+                 processing_done_callback=None, auth_manager=None):
         super().__init__(daemon=True)
         self.audio_queue = audio_queue
         self.config_manager = config_manager
@@ -96,6 +104,7 @@ class ProcessingThread(threading.Thread):
         self.refiner = refiner
         self.injector = injector
         self.history_manager = HistoryManager()
+        self.auth_manager = auth_manager  # Phase 2: Auth integration
         
         # Fallback initialization (may fail if API key not yet configured)
         if not self.transcriber:
@@ -146,6 +155,14 @@ class ProcessingThread(threading.Thread):
 
     def _process_audio_file(self, audio_path):
         """Process a single audio file through the pipeline."""
+
+        # Phase 2: Quota enforcement gate
+        if self.auth_manager:
+            can_riff, reason = self.auth_manager.can_riff()
+            if not can_riff:
+                logging.warning(f"Riff blocked by quota: {reason}")
+                self.notification_callback("Limit Reached", reason)
+                return
 
         # Guard: API key may not be configured yet (first run)
         if not self.transcriber:
@@ -233,6 +250,22 @@ class ProcessingThread(threading.Thread):
         self.config_manager.update_metrics(word_count, duration_sec, style)
         logging.info(f"[Metrics] Updated: +{word_count} words, +{duration_sec:.1f}s, style={style}")
 
+        # Phase 2: Log usage to backend
+        if self.auth_manager:
+            try:
+                logged = self.auth_manager.log_usage(
+                    word_count,
+                    duration_sec,
+                    style,
+                    script_mode
+                )
+                if logged:
+                    logging.info("[Auth] Usage logged to backend successfully")
+                else:
+                    logging.warning("[Auth] Failed to log usage to backend")
+            except Exception as e:
+                logging.warning(f"[Auth] Usage logging error (non-fatal): {e}")
+
         # 6. Type/Inject
         self.injector.inject(refined_text)
 
@@ -261,9 +294,30 @@ class RiffApp:
         logging.info("Initializing RiffApp")
         self.config = ConfigManager()
         self.permission_manager = PermissionManager()
-        
-        # Load API Key
-        self.api_key = self.config.get("api.api_key")
+
+        # Phase 2: Initialize Auth Manager
+        self.auth_manager = None
+        if AUTH_AVAILABLE:
+            try:
+                self.auth_manager = AuthManager(self.config)
+                logging.info(f"[Auth] AuthManager initialized. Authenticated: {self.auth_manager.is_authenticated}")
+
+                # Register device if authenticated
+                if self.auth_manager.is_authenticated:
+                    success, message = self.auth_manager.register_device()
+                    if success:
+                        logging.info(f"[Auth] Device registered: {message}")
+                    else:
+                        logging.warning(f"[Auth] Device registration failed: {message}")
+            except Exception as e:
+                logging.warning(f"[Auth] Failed to initialize AuthManager: {e}")
+
+        # Load API Key (BYOK for free tier, or None for managed key users)
+        if self.auth_manager:
+            self.api_key = self.auth_manager.get_effective_api_key()
+            logging.info(f"[Auth] Using {'BYOK' if self.api_key else 'managed key (proxy)'}")
+        else:
+            self.api_key = self.config.get("api.api_key")
 
         self.tray = SystemTray(
             on_settings=self.open_settings,
@@ -293,15 +347,16 @@ class RiffApp:
         # Initialize Audio Queue and Processing Thread
         self.audio_queue = queue.Queue()
         self.processing_thread = ProcessingThread(
-            self.audio_queue, 
-            self.config, 
-            self.update_tray_status, 
+            self.audio_queue,
+            self.config,
+            self.update_tray_status,
             self.show_notification,
             refiner=self.refiner,
             transcriber=self.transcriber,
             injector=self.injector,
             watchdog_callback=self.update_watchdog,
-            processing_done_callback=self._on_processing_done
+            processing_done_callback=self._on_processing_done,
+            auth_manager=self.auth_manager  # Phase 2: Pass auth_manager
         )
         self.processing_thread.start()
         

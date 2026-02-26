@@ -38,6 +38,13 @@ class ConfigManager:
             "this_week_riffs": 0,
             "week_start_date": "",  # ISO date for tracking weekly reset
             "style_counts": {}  # Track usage per style
+        },
+        "auth": {
+            "supabase_url": "https://your-project.supabase.co",
+            "supabase_anon_key": "your-anon-key-here"
+        },
+        "device": {
+            "device_id": ""  # Auto-generated on first run
         }
     }
 

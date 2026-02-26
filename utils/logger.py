@@ -7,8 +7,13 @@ import datetime
 
 # Sensitive patterns to redact
 SENSITIVE_PATTERNS = [
-    (r"gsk_[a-zA-Z0-9]+", "gsk_REDACTED"),
-    (r"Bearer [a-zA-Z0-9\-\._]+", "Bearer REDACTED")
+    (r"gsk_[a-zA-Z0-9]+", "gsk_REDACTED"),  # Groq API keys
+    (r"Bearer [a-zA-Z0-9\-\._]+", "Bearer REDACTED"),  # Bearer tokens
+    (r"eyJ[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+", "JWT_REDACTED"),  # JWT tokens
+    (r'"access_token":\s*"[^"]+"', '"access_token": "REDACTED"'),  # Access tokens in JSON
+    (r'"refresh_token":\s*"[^"]+"', '"refresh_token": "REDACTED"'),  # Refresh tokens in JSON
+    (r'"apikey":\s*"[^"]+"', '"apikey": "REDACTED"'),  # Supabase API keys in JSON
+    (r"X-Request-Signature:\s*\d+:[a-f0-9]+", "X-Request-Signature: REDACTED"),  # HMAC signatures
 ]
 
 class RedactingFormatter(logging.Formatter):
