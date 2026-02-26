@@ -34,4 +34,3 @@ enable_confirmations = false
 
 # Edge Functions
 [functions]
-verify_jwt = false
