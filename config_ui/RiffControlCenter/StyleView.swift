@@ -37,6 +37,7 @@ struct StyleView: View {
 struct StyleCard: View {
     let style: String
     let isSelected: Bool
+    var isLocked: Bool = false
     let action: () -> Void
     
     var icon: String {
@@ -68,27 +69,46 @@ struct StyleCard: View {
     var body: some View {
         Button(action: action) {
             VStack {
-                Image(systemName: icon)
-                    .font(.system(size: 24))
-                    .foregroundStyle(isSelected ? .white : color)
-                    .padding(.bottom, 5)
-                
+                ZStack {
+                    Image(systemName: icon)
+                        .font(.system(size: 24))
+                        .foregroundStyle(isLocked ? .gray.opacity(0.5) : (isSelected ? .white : color))
+                        .padding(.bottom, 5)
+
+                    // Lock icon overlay for locked styles
+                    if isLocked {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.orange)
+                            .offset(x: 12, y: -12)
+                    }
+                }
+
                 Text(style.capitalized)
                     .font(.headline)
-                    .foregroundStyle(isSelected ? .white : .primary)
+                    .foregroundStyle(isLocked ? .gray.opacity(0.5) : (isSelected ? .white : .primary))
+
+                if isLocked {
+                    Text("Upgrade")
+                        .font(.caption2)
+                        .fontWeight(.bold)
+                        .foregroundStyle(.orange)
+                }
             }
             .frame(maxWidth: .infinity)
             .frame(height: 100)
             .background(
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(isSelected ? color : Color.gray.opacity(0.08))
+                    .fill(isLocked ? Color.gray.opacity(0.05) : (isSelected ? color : Color.gray.opacity(0.08)))
                     .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
-                    .stroke(isSelected ? color.opacity(0.0) : Color.gray.opacity(0.15), lineWidth: 1)
+                    .stroke(isLocked ? Color.orange.opacity(0.3) : (isSelected ? color.opacity(0.0) : Color.gray.opacity(0.15)), lineWidth: isLocked ? 2 : 1)
             )
         }
         .buttonStyle(.plain)
+        .disabled(isLocked)
+        .opacity(isLocked ? 0.7 : 1.0)
     }
 }

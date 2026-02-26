@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ScriptAndStyleView: View {
     @EnvironmentObject var settings: SettingsManager
+    @EnvironmentObject var authManager: SwiftAuthManager
 
     let modes = [
         ("english_mixed", "English Mixed", "Recommended"),
@@ -10,6 +11,15 @@ struct ScriptAndStyleView: View {
     ]
 
     let styles = ["clean", "formal", "casual", "riff"]
+
+    // Phase 3: Check if style is allowed for current tier
+    private func isStyleAllowed(_ style: String) -> Bool {
+        let tier = authManager.subscriptionTier
+        if tier == "free" {
+            return ["clean", "casual"].contains(style)
+        }
+        return true  // Paid tiers get all styles
+    }
 
     var body: some View {
         ScrollView {
@@ -62,9 +72,12 @@ struct ScriptAndStyleView: View {
                             StyleCard(
                                 style: style,
                                 isSelected: settings.config.style.active_style == style,
+                                isLocked: !isStyleAllowed(style),
                                 action: {
-                                    settings.config.style.active_style = style
-                                    settings.saveConfig()
+                                    if isStyleAllowed(style) {
+                                        settings.config.style.active_style = style
+                                        settings.saveConfig()
+                                    }
                                 }
                             )
                         }

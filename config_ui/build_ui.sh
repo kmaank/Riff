@@ -46,6 +46,17 @@ cat > "$OUTPUT_APP/Contents/Info.plist" <<EOF
     <string>AppIcon</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>riff</string>
+            </array>
+            <key>CFBundleURLName</key>
+            <string>com.riff.app.oauth</string>
+        </dict>
+    </array>
 </dict>
 </plist>
 EOF

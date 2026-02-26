@@ -2,10 +2,14 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var settings: SettingsManager
+    @EnvironmentObject var authManager: SwiftAuthManager
     @State private var selectedTab = "script-style"
 
     var body: some View {
-        if (settings.config.onboarding_completed ?? false) == false || settings.config.api.api_key.isEmpty {
+        // Phase 3: Auth gate - require login first
+        if !authManager.isAuthenticated {
+            LoginView()
+        } else if (settings.config.onboarding_completed ?? false) == false || settings.config.api.api_key.isEmpty {
             OnboardingView()
         } else {
             HStack(spacing: 0) {
@@ -35,6 +39,7 @@ struct ContentView: View {
                     SidebarButton(icon: "sparkles", title: "Script & Style", id: "script-style", selection: $selectedTab)
                     SidebarButton(icon: "keyboard", title: "Keys", id: "keys", selection: $selectedTab)
                     SidebarButton(icon: "clock.arrow.circlepath", title: "History", id: "history", selection: $selectedTab)
+                    SidebarButton(icon: "person.circle", title: "Account", id: "account", selection: $selectedTab)
                     SidebarButton(icon: "book.fill", title: "How to", id: "help", selection: $selectedTab)
 
                     Spacer()
@@ -49,6 +54,7 @@ struct ContentView: View {
                     case "script-style": ScriptAndStyleView()
                     case "keys": KeysView()
                     case "history": HistoryView()
+                    case "account": AccountView()
                     case "help": HelpView()
                     default: ScriptAndStyleView()
                     }
