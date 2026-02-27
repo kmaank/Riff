@@ -405,7 +405,9 @@ struct CheckoutResponse: Codable {
     }
 }
 
-#Preview {
-    SubscriptionView()
-        .environmentObject(SwiftAuthManager())
+struct SubscriptionView_Previews: PreviewProvider {
+    static var previews: some View {
+        SubscriptionView()
+            .environmentObject(SwiftAuthManager())
+    }
 }

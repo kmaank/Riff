@@ -25,6 +25,5 @@ struct RiffControlCenterApp: App {
                     }
                 }
         }
-        .windowStyle(.hiddenTitleBar)
     }
 }

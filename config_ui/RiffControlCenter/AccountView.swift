@@ -392,8 +392,10 @@ struct PortalResponse: Codable {
     let url: String
 }
 
-#Preview {
-    AccountView()
-        .environmentObject(SwiftAuthManager())
-        .environmentObject(SettingsManager())
+struct AccountView_Previews: PreviewProvider {
+    static var previews: some View {
+        AccountView()
+            .environmentObject(SwiftAuthManager())
+            .environmentObject(SettingsManager())
+    }
 }

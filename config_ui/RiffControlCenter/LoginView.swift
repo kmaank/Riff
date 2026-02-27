@@ -222,7 +222,9 @@ struct OAuthButton: View {
     }
 }
 
-#Preview {
-    LoginView()
-        .environmentObject(SwiftAuthManager())
+struct LoginView_Previews: PreviewProvider {
+    static var previews: some View {
+        LoginView()
+            .environmentObject(SwiftAuthManager())
+    }
 }
