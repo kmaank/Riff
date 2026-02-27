@@ -48,3 +48,31 @@ export const TIER_LIMITS: Record<string, TierLimits> = {
 export function getTierFeatures(tier: string): TierLimits {
   return TIER_LIMITS[tier] || TIER_LIMITS.free;
 }
+
+// Check if user has exceeded quota for their tier
+export function checkQuota(
+  tier: string,
+  riffsUsed: number,
+  secondsUsed: number
+): { exceeded: boolean; reason?: string } {
+  const limits = getTierFeatures(tier);
+
+  // Check riff limit
+  if (limits.riffs_limit !== null && riffsUsed >= limits.riffs_limit) {
+    return {
+      exceeded: true,
+      reason: `Monthly riff limit reached (${limits.riffs_limit} riffs)`,
+    };
+  }
+
+  // Check seconds limit
+  if (limits.seconds_limit !== null && secondsUsed >= limits.seconds_limit) {
+    const hours = Math.floor(limits.seconds_limit / 3600);
+    return {
+      exceeded: true,
+      reason: `Monthly recording time limit reached (${hours} hours)`,
+    };
+  }
+
+  return { exceeded: false };
+}

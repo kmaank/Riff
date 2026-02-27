@@ -8,12 +8,22 @@ import Stripe from 'https://esm.sh/stripe@14.11.0';
 export function getSupabaseClient(req: Request) {
   const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
   const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
-  
+
   // Get auth token from request header
   const authHeader = req.headers.get('Authorization') ?? '';
-  
+
   return createClient(supabaseUrl, supabaseAnonKey, {
     global: { headers: { Authorization: authHeader } },
+    auth: { persistSession: false },
+  });
+}
+
+// Get Supabase service role client (bypasses RLS)
+export function getSupabaseServiceClient() {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+  const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+
+  return createClient(supabaseUrl, supabaseServiceKey, {
     auth: { persistSession: false },
   });
 }
@@ -30,12 +40,25 @@ export function getStripeClient() {
 // Get user ID from JWT token
 export async function getUserId(supabase: any): Promise<string | null> {
   const { data: { user }, error } = await supabase.auth.getUser();
-  
+
   if (error || !user) {
     return null;
   }
-  
+
   return user.id;
+}
+
+// Get managed Groq API key based on tier
+export function getManagedGroqKey(tier: string): string | null {
+  // Free tier users bring their own key
+  if (tier === 'free') {
+    return null;
+  }
+
+  // For paid tiers, use managed keys
+  // In production, you might have different keys per tier for rate limiting
+  const groqApiKey = Deno.env.get('GROQ_API_KEY');
+  return groqApiKey || null;
 }
 
 // CORS headers for all Edge Functions
