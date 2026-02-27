@@ -30,3 +30,4 @@ supabase/.temp
 # Auth cache files (contain sensitive tokens)
 auth_cache.json
 auth_state.json
+*.tar.gz

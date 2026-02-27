@@ -1,0 +1,71 @@
+name: Deploy Edge Functions
+
+on:
+  push:
+    branches:
+      - main
+      - claude/review-riff-app-ffwNp
+    paths:
+      - 'supabase/functions/**'
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v1
+        with:
+          deno-version: v1.x
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Deploy Edge Functions
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          PROJECT_ID: yrsviodciuepunofxoja
+        run: |
+          # Deploy all functions
+          echo "🚀 Deploying Edge Functions to Supabase..."
+
+          # List of functions to deploy
+          FUNCTIONS=(
+            "validate-subscription"
+            "log-usage"
+            "register-device"
+            "sync-history"
+            "get-api-key"
+            "proxy-transcribe"
+            "proxy-refine"
+            "create-checkout"
+            "create-portal"
+            "stripe-webhook"
+          )
+
+          # Deploy each function
+          for func in "${FUNCTIONS[@]}"; do
+            echo "📦 Deploying $func..."
+            if supabase functions deploy "$func" --project-ref "$PROJECT_ID" --no-verify-jwt; then
+              echo "✅ Successfully deployed: $func"
+            else
+              echo "❌ Failed to deploy: $func"
+              exit 1
+            fi
+          done
+
+          echo "🎉 All functions deployed successfully!"
+
+      - name: Deployment Summary
+        if: success()
+        run: |
+          echo "✅ Edge Functions Deployment Complete"
+          echo "Project: yrsviodciuepunofxoja"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Commit: ${{ github.sha }}"
