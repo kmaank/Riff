@@ -232,9 +232,9 @@ struct AccountView: View {
                 .foregroundStyle(.secondary)
 
             SecureField("gsk_...", text: Binding(
-                get: { settings.config.api.apiKey },
+                get: { settings.config.api.api_key },
                 set: { newValue in
-                    settings.config.api.apiKey = newValue
+                    settings.config.api.api_key = newValue
                     settings.saveConfig()
                 }
             ))
