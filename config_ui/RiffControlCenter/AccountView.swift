@@ -49,7 +49,7 @@ struct AccountView: View {
 
             HStack(spacing: 16) {
                 Circle()
-                    .fill(Color.blue.gradient)
+                    .fill(Color.blue)
                     .frame(width: 60, height: 60)
                     .overlay(
                         Text(String(authManager.userEmail.prefix(1)).uppercased())
