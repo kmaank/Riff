@@ -43,7 +43,6 @@ struct LoginView: View {
                     TextField("your@email.com", text: $email)
                         .textFieldStyle(.plain)
                         .textContentType(.emailAddress)
-                        .autocapitalization(.none)
                         .padding(12)
                         .background(Color.gray.opacity(0.08))
                         .cornerRadius(8)
