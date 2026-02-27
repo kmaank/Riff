@@ -159,6 +159,7 @@ struct SubscriptionView: View {
                                 } else {
                                     Image(systemName: "sparkles")
                                     Text("Get Lifetime")
+                                        .fontWeight(.semibold)
                                 }
                             }
                             .padding(.horizontal, 24)
@@ -166,7 +167,6 @@ struct SubscriptionView: View {
                             .background(Color.orange)
                             .foregroundStyle(.white)
                             .cornerRadius(8)
-                            .fontWeight(.semibold)
                         }
                         .buttonStyle(.plain)
                         .disabled(isCreatingCheckout || authManager.subscriptionTier == "lifetime")
@@ -405,7 +405,9 @@ struct CheckoutResponse: Codable {
     }
 }
 
-#Preview {
-    SubscriptionView()
-        .environmentObject(SwiftAuthManager())
+struct SubscriptionView_Previews: PreviewProvider {
+    static var previews: some View {
+        SubscriptionView()
+            .environmentObject(SwiftAuthManager())
+    }
 }
