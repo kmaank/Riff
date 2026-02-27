@@ -26,8 +26,8 @@ class SwiftAuthManager: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
 
-    private let supabaseUrl: String
-    private let supabaseAnonKey: String
+    let supabaseUrl: String
+    let supabaseAnonKey: String
     private let authStatePath: URL
 
     init() {

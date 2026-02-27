@@ -1,4 +1,5 @@
 import SwiftUI
+import ApplicationServices
 
 struct OnboardingView: View {
     @EnvironmentObject var settings: SettingsManager

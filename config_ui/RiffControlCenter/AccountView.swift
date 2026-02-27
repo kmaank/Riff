@@ -16,230 +16,15 @@ struct AccountView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 30) {
-                // User Info Section
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("Account")
-                        .font(.title2)
-                        .bold()
-
-                    HStack(spacing: 16) {
-                        // Profile Icon
-                        Circle()
-                            .fill(Color.blue.gradient)
-                            .frame(width: 60, height: 60)
-                            .overlay(
-                                Text(String(authManager.userEmail.prefix(1)).uppercased())
-                                    .font(.title)
-                                    .fontWeight(.bold)
-                                    .foregroundStyle(.white)
-                            )
-
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(authManager.userEmail)
-                                .font(.body)
-                                .fontWeight(.medium)
-
-                            Text("Member since \(memberSinceDate())")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Spacer()
-                    }
-                    .padding(20)
-                    .background(Color.gray.opacity(0.08))
-                    .cornerRadius(12)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.gray.opacity(0.15), lineWidth: 1)
-                    )
-                }
-
+                userInfoSection
                 Divider()
-
-                // Subscription Section
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("Subscription")
-                        .font(.title2)
-                        .bold()
-
-                    // Subscription Card
-                    VStack(alignment: .leading, spacing: 16) {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(tierDisplayName())
-                                    .font(.headline)
-
-                                HStack(spacing: 6) {
-                                    Circle()
-                                        .fill(statusColor())
-                                        .frame(width: 8, height: 8)
-
-                                    Text(authManager.subscriptionStatus.capitalized)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-
-                            Spacer()
-
-                            tierBadge()
-                        }
-
-                        // Usage Progress Bars
-                        if let quota = authManager.quota {
-                            VStack(spacing: 12) {
-                                // Riffs usage
-                                if let riffsLimit = quota.riffsLimit {
-                                    UsageBar(
-                                        label: "Riffs",
-                                        used: quota.riffsUsed,
-                                        limit: riffsLimit,
-                                        unit: "riffs"
-                                    )
-                                } else {
-                                    HStack {
-                                        Text("Riffs")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                        Spacer()
-                                        Text("\(quota.riffsUsed) riffs")
-                                            .font(.caption)
-                                            .fontWeight(.medium)
-                                        Text("∞")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-
-                                // Recording time usage
-                                if let secondsLimit = quota.secondsLimit {
-                                    UsageBar(
-                                        label: "Recording Time",
-                                        used: Int(quota.secondsUsed / 60),
-                                        limit: secondsLimit / 60,
-                                        unit: "minutes"
-                                    )
-                                } else {
-                                    HStack {
-                                        Text("Recording Time")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                        Spacer()
-                                        Text("\(Int(quota.secondsUsed / 60)) minutes")
-                                            .font(.caption)
-                                            .fontWeight(.medium)
-                                        Text("∞")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
-                        }
-
-                        // Action Buttons
-                        HStack(spacing: 12) {
-                            // Upgrade button (for free/starter users)
-                            if authManager.subscriptionTier == "free" || authManager.subscriptionTier == "starter" {
-                                Button(action: { showSubscriptionView = true }) {
-                                    HStack {
-                                        Image(systemName: "arrow.up.circle.fill")
-                                        Text("Upgrade")
-                                    }
-                                    .frame(maxWidth: .infinity)
-                                    .padding(12)
-                                    .background(Color.blue)
-                                    .foregroundStyle(.white)
-                                    .cornerRadius(8)
-                                }
-                                .buttonStyle(.plain)
-                            }
-
-                            // Manage Billing button (for paid users)
-                            if authManager.subscriptionTier != "free" {
-                                Button(action: openBillingPortal) {
-                                    HStack {
-                                        if isLoadingPortal {
-                                            ProgressView()
-                                                .progressViewStyle(.circular)
-                                                .scaleEffect(0.7)
-                                        } else {
-                                            Image(systemName: "creditcard.circle")
-                                        }
-                                        Text("Manage Billing")
-                                    }
-                                    .frame(maxWidth: .infinity)
-                                    .padding(12)
-                                    .background(Color.gray.opacity(0.08))
-                                    .foregroundStyle(.primary)
-                                    .cornerRadius(8)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 8)
-                                            .stroke(Color.gray.opacity(0.15), lineWidth: 1)
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                                .disabled(isLoadingPortal)
-                            }
-                        }
-                    }
-                    .padding(20)
-                    .background(Color.gray.opacity(0.08))
-                    .cornerRadius(12)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.gray.opacity(0.15), lineWidth: 1)
-                    )
-                }
-
+                subscriptionSection
                 Divider()
-
-                // API Key Section (BYOK for free tier only)
                 if authManager.subscriptionTier == "free" {
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text("API Key")
-                            .font(.title2)
-                            .bold()
-
-                        Text("Free tier users need to provide their own Groq API key")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                        SecureField("gsk_...", text: Binding(
-                            get: { settings.config.api.apiKey },
-                            set: { newValue in
-                                settings.config.api.apiKey = newValue
-                                settings.saveConfig()
-                            }
-                        ))
-                        .textFieldStyle(.plain)
-                        .font(.system(.body, design: .monospaced))
-                        .padding(12)
-                        .background(Color.gray.opacity(0.08))
-                        .cornerRadius(8)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color.gray.opacity(0.15), lineWidth: 1)
-                        )
-
-                        Link("Get your free API key from Groq →", destination: URL(string: "https://console.groq.com")!)
-                            .font(.caption)
-                            .foregroundStyle(.blue)
-                    }
-
+                    apiKeySection
                     Divider()
                 }
-
-                // Sign Out
-                Button(action: { authManager.signOut() }) {
-                    HStack {
-                        Image(systemName: "rectangle.portrait.and.arrow.right")
-                        Text("Sign Out")
-                    }
-                    .foregroundStyle(.red)
-                }
-                .buttonStyle(.plain)
-
+                signOutButton
                 Spacer()
             }
             .padding(30)
@@ -249,11 +34,235 @@ struct AccountView: View {
                 .environmentObject(authManager)
         }
         .task {
-            // Load subscription data on appear
             if authManager.isAuthenticated {
                 try? await authManager.validateSubscription()
             }
         }
+    }
+
+    @ViewBuilder
+    private var userInfoSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Account")
+                .font(.title2)
+                .bold()
+
+            HStack(spacing: 16) {
+                Circle()
+                    .fill(Color.blue)
+                    .frame(width: 60, height: 60)
+                    .overlay(
+                        Text(String(authManager.userEmail.prefix(1)).uppercased())
+                            .font(.title)
+                            .fontWeight(.bold)
+                            .foregroundStyle(.white)
+                    )
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(authManager.userEmail)
+                        .font(.body)
+                        .fontWeight(.medium)
+
+                    Text("Member since \(memberSinceDate())")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+            }
+            .padding(20)
+            .background(Color.gray.opacity(0.08))
+            .cornerRadius(12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.gray.opacity(0.15), lineWidth: 1)
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var subscriptionSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Subscription")
+                .font(.title2)
+                .bold()
+
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(tierDisplayName())
+                            .font(.headline)
+
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(statusColor())
+                                .frame(width: 8, height: 8)
+
+                            Text(authManager.subscriptionStatus.capitalized)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Spacer()
+
+                    tierBadge()
+                }
+
+                if let quota = authManager.quota {
+                    quotaUsageSection(quota: quota)
+                }
+
+                subscriptionActionButtons
+            }
+            .padding(20)
+            .background(Color.gray.opacity(0.08))
+            .cornerRadius(12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.gray.opacity(0.15), lineWidth: 1)
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func quotaUsageSection(quota: QuotaInfo) -> some View {
+        VStack(spacing: 12) {
+            if let riffsLimit = quota.riffsLimit {
+                UsageBar(
+                    label: "Riffs",
+                    used: quota.riffsUsed,
+                    limit: riffsLimit,
+                    unit: "riffs"
+                )
+            } else {
+                HStack {
+                    Text("Riffs")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(quota.riffsUsed) riffs")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                    Text("∞")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let secondsLimit = quota.secondsLimit {
+                UsageBar(
+                    label: "Recording Time",
+                    used: Int(quota.secondsUsed / 60),
+                    limit: secondsLimit / 60,
+                    unit: "minutes"
+                )
+            } else {
+                HStack {
+                    Text("Recording Time")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(Int(quota.secondsUsed / 60)) minutes")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                    Text("∞")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var subscriptionActionButtons: some View {
+        HStack(spacing: 12) {
+            if authManager.subscriptionTier == "free" || authManager.subscriptionTier == "starter" {
+                Button(action: { showSubscriptionView = true }) {
+                    HStack {
+                        Image(systemName: "arrow.up.circle.fill")
+                        Text("Upgrade")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(12)
+                    .background(Color.blue)
+                    .foregroundStyle(.white)
+                    .cornerRadius(8)
+                }
+                .buttonStyle(.plain)
+            }
+
+            if authManager.subscriptionTier != "free" {
+                Button(action: openBillingPortal) {
+                    HStack {
+                        if isLoadingPortal {
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                                .scaleEffect(0.7)
+                        } else {
+                            Image(systemName: "creditcard.circle")
+                        }
+                        Text("Manage Billing")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(12)
+                    .background(Color.gray.opacity(0.08))
+                    .foregroundStyle(.primary)
+                    .cornerRadius(8)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.gray.opacity(0.15), lineWidth: 1)
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(isLoadingPortal)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var apiKeySection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("API Key")
+                .font(.title2)
+                .bold()
+
+            Text("Free tier users need to provide their own Groq API key")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            SecureField("gsk_...", text: Binding(
+                get: { settings.config.api.api_key },
+                set: { newValue in
+                    settings.config.api.api_key = newValue
+                    settings.saveConfig()
+                }
+            ))
+            .textFieldStyle(.plain)
+            .font(.system(.body, design: .monospaced))
+            .padding(12)
+            .background(Color.gray.opacity(0.08))
+            .cornerRadius(8)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.gray.opacity(0.15), lineWidth: 1)
+            )
+
+            Link("Get your free API key from Groq →", destination: URL(string: "https://console.groq.com")!)
+                .font(.caption)
+                .foregroundStyle(.blue)
+        }
+    }
+
+    private var signOutButton: some View {
+        Button(action: { authManager.signOut() }) {
+            HStack {
+                Image(systemName: "rectangle.portrait.and.arrow.right")
+                Text("Sign Out")
+            }
+            .foregroundStyle(.red)
+        }
+        .buttonStyle(.plain)
     }
 
     private func tierDisplayName() -> String {
@@ -306,7 +315,6 @@ struct AccountView: View {
         isLoadingPortal = true
 
         Task {
-            // Call create-portal Edge Function
             guard let accessToken = UserDefaults.standard.string(forKey: "supabase_access_token") else {
                 isLoadingPortal = false
                 return
@@ -367,11 +375,9 @@ struct UsageBar: View {
 
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
-                    // Background
                     RoundedRectangle(cornerRadius: 4)
                         .fill(Color.gray.opacity(0.15))
 
-                    // Progress
                     RoundedRectangle(cornerRadius: 4)
                         .fill(isNearLimit ? Color.red : Color.blue)
                         .frame(width: geometry.size.width * percentage)
