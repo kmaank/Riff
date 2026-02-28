@@ -200,7 +200,12 @@ class SwiftAuthManager: ObservableObject {
         subscriptionTier = "free"
         quota = nil
 
-        // Clear stored tokens
+        // Clear stored tokens from Keychain
+        deleteFromKeychain(service: "riff", account: "supabase_access_token")
+        deleteFromKeychain(service: "riff", account: "supabase_refresh_token")
+        deleteFromKeychain(service: "riff", account: "managed_groq_key")
+
+        // Clear from UserDefaults
         UserDefaults.standard.removeObject(forKey: "supabase_access_token")
         UserDefaults.standard.removeObject(forKey: "supabase_refresh_token")
 
@@ -208,17 +213,32 @@ class SwiftAuthManager: ObservableObject {
         writeAuthState(authenticated: false, email: "", userId: "")
     }
 
+    private func deleteFromKeychain(service: String, account: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+
     // MARK: - Subscription Methods
 
     func validateSubscription() async throws {
-        guard let accessToken = UserDefaults.standard.string(forKey: "supabase_access_token") else {
+        // Try UserDefaults first, then Keychain
+        var accessToken = UserDefaults.standard.string(forKey: "supabase_access_token")
+        if accessToken == nil {
+            accessToken = getFromKeychain(service: "riff", account: "supabase_access_token")
+        }
+
+        guard let token = accessToken else {
             throw AuthError.notAuthenticated
         }
 
         let url = URL(string: "\(supabaseUrl)/functions/v1/validate-subscription")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
 
         let (data, _) = try await URLSession.shared.data(for: request)
@@ -274,8 +294,58 @@ class SwiftAuthManager: ObservableObject {
     // MARK: - Token Management
 
     private func storeTokens(accessToken: String, refreshToken: String) {
+        // Store in Keychain for Python backend compatibility
+        storeInKeychain(service: "riff", account: "supabase_access_token", value: accessToken)
+        storeInKeychain(service: "riff", account: "supabase_refresh_token", value: refreshToken)
+
+        // Also store in UserDefaults for Swift UI
         UserDefaults.standard.set(accessToken, forKey: "supabase_access_token")
         UserDefaults.standard.set(refreshToken, forKey: "supabase_refresh_token")
+    }
+
+    private func storeInKeychain(service: String, account: String, value: String) {
+        let data = value.data(using: .utf8)!
+
+        // Delete existing item first
+        let deleteQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        SecItemDelete(deleteQuery as CFDictionary)
+
+        // Add new item
+        let addQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecValueData as String: data
+        ]
+
+        let status = SecItemAdd(addQuery as CFDictionary, nil)
+        if status != errSecSuccess {
+            print("Error storing in keychain: \(status)")
+        }
+    }
+
+    private func getFromKeychain(service: String, account: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true
+        ]
+
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+
+        guard status == errSecSuccess,
+              let data = result as? Data,
+              let value = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+
+        return value
     }
 
     private func decodeJWT(token: String) -> [String: Any]? {
