@@ -117,7 +117,7 @@ class SwiftAuthManager: ObservableObject {
         request.httpMethod = "POST"
         request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 15
+        request.timeoutInterval = 30
 
         let body: [String: Any] = ["email": email, "password": password]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -152,6 +152,13 @@ class SwiftAuthManager: ObservableObject {
 
                 // Store tokens securely
                 storeTokens(accessToken: result.accessToken, refreshToken: result.refreshToken)
+            } else if httpResponse.statusCode == 503 || httpResponse.statusCode == 540 {
+                AuthLogger.log("Supabase project appears paused or unavailable (HTTP \(httpResponse.statusCode))")
+                await MainActor.run {
+                    self.isLoading = false
+                    self.errorMessage = "Supabase project is paused. Go to supabase.com/dashboard to unpause it, then try again."
+                }
+                throw AuthError.loginFailed("Supabase project paused")
             } else {
                 let responseBody = String(data: data, encoding: .utf8) ?? "<non-utf8>"
                 AuthLogger.log("Login failed with status \(httpResponse.statusCode): \(responseBody)")
@@ -169,13 +176,14 @@ class SwiftAuthManager: ObservableObject {
             throw error
         } catch {
             // Network errors, timeouts, DNS failures, etc.
-            AuthLogger.log("ERROR: Network error during login: \(error.localizedDescription)")
+            let nsError = error as NSError
+            AuthLogger.log("ERROR: Network error during login: code=\(nsError.code), domain=\(nsError.domain), description=\(error.localizedDescription)")
             let message: String
-            if (error as NSError).code == NSURLErrorNotConnectedToInternet {
+            if nsError.code == NSURLErrorNotConnectedToInternet {
                 message = "No internet connection"
-            } else if (error as NSError).code == NSURLErrorTimedOut {
-                message = "Request timed out — please try again"
-            } else if (error as NSError).code == NSURLErrorCannotFindHost {
+            } else if nsError.code == NSURLErrorTimedOut {
+                message = "Request timed out. Your Supabase project may be paused — go to supabase.com/dashboard to check, then try again."
+            } else if nsError.code == NSURLErrorCannotFindHost {
                 message = "Cannot reach server — check your Supabase URL configuration"
             } else {
                 message = "Connection error: \(error.localizedDescription)"
@@ -222,7 +230,7 @@ class SwiftAuthManager: ObservableObject {
         request.httpMethod = "POST"
         request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 15
+        request.timeoutInterval = 30
 
         let body: [String: Any] = ["email": email, "password": password]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -270,6 +278,13 @@ class SwiftAuthManager: ObservableObject {
                     }
                     // Don't throw — this is a success state, not an error
                 }
+            } else if httpResponse.statusCode == 503 || httpResponse.statusCode == 540 {
+                AuthLogger.log("Supabase project appears paused or unavailable (HTTP \(httpResponse.statusCode))")
+                await MainActor.run {
+                    self.isLoading = false
+                    self.errorMessage = "Supabase project is paused. Go to supabase.com/dashboard to unpause it, then try again."
+                }
+                throw AuthError.signupFailed("Supabase project paused")
             } else {
                 let responseBody = String(data: data, encoding: .utf8) ?? "<non-utf8>"
                 AuthLogger.log("Signup failed with status \(httpResponse.statusCode): \(responseBody)")
@@ -285,13 +300,14 @@ class SwiftAuthManager: ObservableObject {
         } catch let error as AuthError {
             throw error
         } catch {
-            AuthLogger.log("ERROR: Network error during signup: \(error.localizedDescription)")
+            let nsError = error as NSError
+            AuthLogger.log("ERROR: Network error during signup: code=\(nsError.code), domain=\(nsError.domain), description=\(error.localizedDescription)")
             let message: String
-            if (error as NSError).code == NSURLErrorNotConnectedToInternet {
+            if nsError.code == NSURLErrorNotConnectedToInternet {
                 message = "No internet connection"
-            } else if (error as NSError).code == NSURLErrorTimedOut {
-                message = "Request timed out — please try again"
-            } else if (error as NSError).code == NSURLErrorCannotFindHost {
+            } else if nsError.code == NSURLErrorTimedOut {
+                message = "Request timed out. Your Supabase project may be paused — go to supabase.com/dashboard to check, then try again."
+            } else if nsError.code == NSURLErrorCannotFindHost {
                 message = "Cannot reach server — check your Supabase URL configuration"
             } else {
                 message = "Connection error: \(error.localizedDescription)"
