@@ -12,7 +12,6 @@ struct LoginView: View {
     @State private var email: String = ""
     @State private var password: String = ""
     @State private var isSignUp: Bool = false
-    @State private var showError: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -68,18 +67,19 @@ struct LoginView: View {
                         )
                 }
 
-                // Error message
-                if showError, let errorMessage = authManager.errorMessage {
+                // Status message (error or info)
+                if let message = authManager.errorMessage {
+                    let isInfo = message.starts(with: "Check your email")
                     HStack {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
-                        Text(errorMessage)
+                        Image(systemName: isInfo ? "envelope.circle.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(isInfo ? .green : .red)
+                        Text(message)
                             .font(.caption)
-                            .foregroundStyle(.red)
+                            .foregroundStyle(isInfo ? .primary : .red)
                     }
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.red.opacity(0.1))
+                    .background(isInfo ? Color.green.opacity(0.1) : Color.red.opacity(0.1))
                     .cornerRadius(8)
                 }
 
@@ -172,14 +172,9 @@ struct LoginView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(NSColor.windowBackgroundColor))
-        .onChange(of: authManager.errorMessage) { _ in
-            showError = authManager.errorMessage != nil
-        }
     }
 
     private func handleSubmit() {
-        showError = false
-
         Task {
             do {
                 if isSignUp {
@@ -188,7 +183,8 @@ struct LoginView: View {
                     try await authManager.signInWithEmail(email: email, password: password)
                 }
             } catch {
-                showError = true
+                // Error message is already set on authManager.errorMessage by the auth methods
+                // so the UI will show it automatically via the binding
             }
         }
     }

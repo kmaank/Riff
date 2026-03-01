@@ -29,140 +29,308 @@ class SwiftAuthManager: ObservableObject {
     let supabaseUrl: String
     let supabaseAnonKey: String
     private let authStatePath: URL
+    private let riffDir: URL
+
+    /// Whether the Supabase credentials are real (not placeholder defaults)
+    var hasValidCredentials: Bool {
+        return !supabaseUrl.contains("your-project") && !supabaseAnonKey.contains("your-anon-key")
+    }
 
     init() {
         // Read Supabase config from settings
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let riffDir = appSupport.appendingPathComponent("Riff")
         let configPath = riffDir.appendingPathComponent("config.json")
+        self.riffDir = riffDir
 
         // Load config to get Supabase credentials
         var url = "https://your-project.supabase.co"
         var key = "your-anon-key"
+
+        AuthLogger.log("Loading config from: \(configPath.path)")
 
         if let configData = try? Data(contentsOf: configPath),
            let config = try? JSONDecoder().decode([String: AnyCodable].self, from: configData),
            let auth = config["auth"]?.value as? [String: Any] {
             url = auth["supabase_url"] as? String ?? url
             key = auth["supabase_anon_key"] as? String ?? key
+            AuthLogger.log("Config loaded successfully. Supabase URL: \(url)")
+        } else {
+            AuthLogger.log("WARNING: Could not load config.json — using default placeholder credentials")
         }
 
         self.supabaseUrl = url
         self.supabaseAnonKey = key
         self.authStatePath = riffDir.appendingPathComponent("auth_state.json")
 
+        // Validate credentials
+        if supabaseUrl.contains("your-project") || supabaseAnonKey.contains("your-anon-key") {
+            AuthLogger.log("ERROR: Supabase credentials are still placeholder defaults! Login will not work.")
+            AuthLogger.log("  supabase_url: \(supabaseUrl)")
+            AuthLogger.log("  supabase_anon_key: \(String(supabaseAnonKey.prefix(10)))...")
+        } else {
+            AuthLogger.log("Supabase credentials loaded. URL: \(supabaseUrl)")
+        }
+
         // Load cached auth state
         loadCachedState()
 
         // Start polling auth_state.json for changes from Python
         startAuthStateMonitor()
+
+        AuthLogger.log("SwiftAuthManager initialized. isAuthenticated=\(isAuthenticated), email=\(userEmail)")
     }
 
     // MARK: - Authentication Methods
 
     func signInWithEmail(email: String, password: String) async throws {
-        isLoading = true
-        errorMessage = nil
+        AuthLogger.log("signInWithEmail called for: \(email)")
 
-        let url = URL(string: "\(supabaseUrl)/auth/v1/token?grant_type=password")!
+        // Validate credentials before attempting
+        guard hasValidCredentials else {
+            AuthLogger.log("ERROR: Cannot sign in — Supabase credentials are placeholder defaults")
+            await MainActor.run {
+                self.errorMessage = "App not configured: Supabase credentials are missing. Please contact support."
+                self.isLoading = false
+            }
+            throw AuthError.loginFailed("Supabase credentials not configured")
+        }
+
+        await MainActor.run {
+            self.isLoading = true
+            self.errorMessage = nil
+        }
+
+        let endpoint = "\(supabaseUrl)/auth/v1/token?grant_type=password"
+        AuthLogger.log("POST \(endpoint)")
+
+        guard let url = URL(string: endpoint) else {
+            AuthLogger.log("ERROR: Invalid URL: \(endpoint)")
+            await MainActor.run {
+                self.isLoading = false
+                self.errorMessage = "Invalid server URL configuration"
+            }
+            throw AuthError.loginFailed("Invalid URL")
+        }
+
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
 
         let body: [String: Any] = ["email": email, "password": password]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
 
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw AuthError.invalidResponse
-        }
-
-        if httpResponse.statusCode == 200 {
-            let result = try JSONDecoder().decode(AuthResponse.self, from: data)
-
-            await MainActor.run {
-                self.isAuthenticated = true
-                self.userEmail = result.user.email
-                self.userId = result.user.id
-                self.isLoading = false
+            guard let httpResponse = response as? HTTPURLResponse else {
+                AuthLogger.log("ERROR: Response is not HTTP")
+                await MainActor.run {
+                    self.isLoading = false
+                    self.errorMessage = "Invalid server response"
+                }
+                throw AuthError.invalidResponse
             }
 
-            // Write auth state for Python
-            writeAuthState(authenticated: true, email: result.user.email, userId: result.user.id)
+            AuthLogger.log("Response status: \(httpResponse.statusCode)")
 
-            // Store tokens securely
-            storeTokens(accessToken: result.accessToken, refreshToken: result.refreshToken)
-        } else {
-            let error = try? JSONDecoder().decode(ErrorResponse.self, from: data)
+            if httpResponse.statusCode == 200 {
+                let result = try JSONDecoder().decode(AuthResponse.self, from: data)
+                AuthLogger.log("Login successful for user: \(result.user.id)")
+
+                await MainActor.run {
+                    self.isAuthenticated = true
+                    self.userEmail = result.user.email
+                    self.userId = result.user.id
+                    self.isLoading = false
+                }
+
+                // Write auth state for Python
+                writeAuthState(authenticated: true, email: result.user.email, userId: result.user.id)
+
+                // Store tokens securely
+                storeTokens(accessToken: result.accessToken, refreshToken: result.refreshToken)
+            } else {
+                let responseBody = String(data: data, encoding: .utf8) ?? "<non-utf8>"
+                AuthLogger.log("Login failed with status \(httpResponse.statusCode): \(responseBody)")
+
+                let error = try? JSONDecoder().decode(ErrorResponse.self, from: data)
+                let message = error?.errorDescription ?? error?.msg ?? "Login failed (HTTP \(httpResponse.statusCode))"
+                await MainActor.run {
+                    self.isLoading = false
+                    self.errorMessage = message
+                }
+                throw AuthError.loginFailed(message)
+            }
+        } catch let error as AuthError {
+            // Re-throw auth errors (already handled above)
+            throw error
+        } catch {
+            // Network errors, timeouts, DNS failures, etc.
+            AuthLogger.log("ERROR: Network error during login: \(error.localizedDescription)")
+            let message: String
+            if (error as NSError).code == NSURLErrorNotConnectedToInternet {
+                message = "No internet connection"
+            } else if (error as NSError).code == NSURLErrorTimedOut {
+                message = "Request timed out — please try again"
+            } else if (error as NSError).code == NSURLErrorCannotFindHost {
+                message = "Cannot reach server — check your Supabase URL configuration"
+            } else {
+                message = "Connection error: \(error.localizedDescription)"
+            }
             await MainActor.run {
                 self.isLoading = false
-                self.errorMessage = error?.errorDescription ?? "Login failed"
+                self.errorMessage = message
             }
-            throw AuthError.loginFailed(error?.errorDescription ?? "Unknown error")
+            throw AuthError.loginFailed(message)
         }
     }
 
     func signUpWithEmail(email: String, password: String) async throws {
-        isLoading = true
-        errorMessage = nil
+        AuthLogger.log("signUpWithEmail called for: \(email)")
 
-        let url = URL(string: "\(supabaseUrl)/auth/v1/signup")!
+        // Validate credentials before attempting
+        guard hasValidCredentials else {
+            AuthLogger.log("ERROR: Cannot sign up — Supabase credentials are placeholder defaults")
+            await MainActor.run {
+                self.errorMessage = "App not configured: Supabase credentials are missing. Please contact support."
+                self.isLoading = false
+            }
+            throw AuthError.signupFailed("Supabase credentials not configured")
+        }
+
+        await MainActor.run {
+            self.isLoading = true
+            self.errorMessage = nil
+        }
+
+        let endpoint = "\(supabaseUrl)/auth/v1/signup"
+        AuthLogger.log("POST \(endpoint)")
+
+        guard let url = URL(string: endpoint) else {
+            AuthLogger.log("ERROR: Invalid URL: \(endpoint)")
+            await MainActor.run {
+                self.isLoading = false
+                self.errorMessage = "Invalid server URL configuration"
+            }
+            throw AuthError.signupFailed("Invalid URL")
+        }
+
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
 
         let body: [String: Any] = ["email": email, "password": password]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
 
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw AuthError.invalidResponse
-        }
-
-        if httpResponse.statusCode == 200 || httpResponse.statusCode == 201 {
-            let result = try JSONDecoder().decode(AuthResponse.self, from: data)
-
-            await MainActor.run {
-                self.isAuthenticated = true
-                self.userEmail = result.user.email
-                self.userId = result.user.id
-                self.isLoading = false
+            guard let httpResponse = response as? HTTPURLResponse else {
+                AuthLogger.log("ERROR: Response is not HTTP")
+                await MainActor.run {
+                    self.isLoading = false
+                    self.errorMessage = "Invalid server response"
+                }
+                throw AuthError.invalidResponse
             }
 
-            // Write auth state for Python
-            writeAuthState(authenticated: true, email: result.user.email, userId: result.user.id)
+            AuthLogger.log("Response status: \(httpResponse.statusCode)")
 
-            // Store tokens
-            storeTokens(accessToken: result.accessToken, refreshToken: result.refreshToken)
-        } else {
-            let error = try? JSONDecoder().decode(ErrorResponse.self, from: data)
+            if httpResponse.statusCode == 200 || httpResponse.statusCode == 201 {
+                // Supabase signup may return user without tokens if email confirmation is required
+                if let result = try? JSONDecoder().decode(AuthResponse.self, from: data),
+                   !result.accessToken.isEmpty {
+                    // Tokens present — user is immediately authenticated (no email confirmation)
+                    AuthLogger.log("Signup successful with immediate auth for user: \(result.user.id)")
+
+                    await MainActor.run {
+                        self.isAuthenticated = true
+                        self.userEmail = result.user.email
+                        self.userId = result.user.id
+                        self.isLoading = false
+                    }
+
+                    writeAuthState(authenticated: true, email: result.user.email, userId: result.user.id)
+                    storeTokens(accessToken: result.accessToken, refreshToken: result.refreshToken)
+                } else {
+                    // No tokens — email confirmation is required
+                    AuthLogger.log("Signup successful but email confirmation required")
+
+                    let responseBody = String(data: data, encoding: .utf8) ?? "<non-utf8>"
+                    AuthLogger.log("Signup response body: \(responseBody)")
+
+                    await MainActor.run {
+                        self.isLoading = false
+                        self.errorMessage = "Check your email! We sent a confirmation link to \(email)."
+                    }
+                    // Don't throw — this is a success state, not an error
+                }
+            } else {
+                let responseBody = String(data: data, encoding: .utf8) ?? "<non-utf8>"
+                AuthLogger.log("Signup failed with status \(httpResponse.statusCode): \(responseBody)")
+
+                let error = try? JSONDecoder().decode(ErrorResponse.self, from: data)
+                let message = error?.errorDescription ?? error?.msg ?? "Signup failed (HTTP \(httpResponse.statusCode))"
+                await MainActor.run {
+                    self.isLoading = false
+                    self.errorMessage = message
+                }
+                throw AuthError.signupFailed(message)
+            }
+        } catch let error as AuthError {
+            throw error
+        } catch {
+            AuthLogger.log("ERROR: Network error during signup: \(error.localizedDescription)")
+            let message: String
+            if (error as NSError).code == NSURLErrorNotConnectedToInternet {
+                message = "No internet connection"
+            } else if (error as NSError).code == NSURLErrorTimedOut {
+                message = "Request timed out — please try again"
+            } else if (error as NSError).code == NSURLErrorCannotFindHost {
+                message = "Cannot reach server — check your Supabase URL configuration"
+            } else {
+                message = "Connection error: \(error.localizedDescription)"
+            }
             await MainActor.run {
                 self.isLoading = false
-                self.errorMessage = error?.errorDescription ?? "Signup failed"
+                self.errorMessage = message
             }
-            throw AuthError.signupFailed(error?.errorDescription ?? "Unknown error")
+            throw AuthError.signupFailed(message)
         }
     }
 
     func signInWithOAuth(provider: String) {
-        // Open OAuth flow in system browser
-        // Provider: "google", "github", "apple"
+        AuthLogger.log("signInWithOAuth called for provider: \(provider)")
+
+        guard hasValidCredentials else {
+            AuthLogger.log("ERROR: Cannot use OAuth — Supabase credentials are placeholder defaults")
+            DispatchQueue.main.async {
+                self.errorMessage = "App not configured: Supabase credentials are missing."
+            }
+            return
+        }
+
         let authUrl = "\(supabaseUrl)/auth/v1/authorize?provider=\(provider)&redirect_to=riff://oauth/callback"
+        AuthLogger.log("Opening OAuth URL: \(authUrl)")
 
         if let url = URL(string: authUrl) {
             NSWorkspace.shared.open(url)
+        } else {
+            AuthLogger.log("ERROR: Invalid OAuth URL: \(authUrl)")
         }
     }
 
     func handleOAuthCallback(url: URL) {
-        // Parse OAuth callback URL
-        // Extract access_token and refresh_token from URL fragments
+        AuthLogger.log("handleOAuthCallback called with URL: \(url.absoluteString)")
+
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let fragment = components.fragment else {
+            AuthLogger.log("ERROR: OAuth callback URL has no fragment")
             return
         }
 
@@ -174,26 +342,43 @@ class SwiftAuthManager: ObservableObject {
                 }
             }
 
+        AuthLogger.log("OAuth callback params: \(params.keys.joined(separator: ", "))")
+
         if let accessToken = params["access_token"],
            let refreshToken = params["refresh_token"] {
 
-            // Store tokens
+            AuthLogger.log("OAuth tokens received, storing...")
             storeTokens(accessToken: accessToken, refreshToken: refreshToken)
 
-            // Decode JWT to get user info (basic decode, no verification)
             if let userInfo = decodeJWT(token: accessToken) {
+                let email = userInfo["email"] as? String ?? ""
+                let userId = userInfo["sub"] as? String ?? ""
+                AuthLogger.log("OAuth JWT decoded: email=\(email), userId=\(userId)")
+
                 DispatchQueue.main.async {
                     self.isAuthenticated = true
-                    self.userEmail = userInfo["email"] as? String ?? ""
-                    self.userId = userInfo["sub"] as? String ?? ""
+                    self.userEmail = email
+                    self.userId = userId
                 }
 
-                writeAuthState(authenticated: true, email: self.userEmail, userId: self.userId)
+                writeAuthState(authenticated: true, email: email, userId: userId)
+            } else {
+                AuthLogger.log("ERROR: Failed to decode OAuth JWT")
+            }
+        } else {
+            AuthLogger.log("ERROR: OAuth callback missing access_token or refresh_token")
+            if let errorDesc = params["error_description"] {
+                AuthLogger.log("OAuth error: \(errorDesc)")
+                DispatchQueue.main.async {
+                    self.errorMessage = errorDesc
+                }
             }
         }
     }
 
     func signOut() {
+        AuthLogger.log("signOut called")
+
         isAuthenticated = false
         userEmail = ""
         userId = ""
@@ -211,6 +396,7 @@ class SwiftAuthManager: ObservableObject {
 
         // Write auth state for Python
         writeAuthState(authenticated: false, email: "", userId: "")
+        AuthLogger.log("Sign out complete — tokens cleared, auth state written")
     }
 
     private func deleteFromKeychain(service: String, account: String) {
@@ -225,49 +411,78 @@ class SwiftAuthManager: ObservableObject {
     // MARK: - Subscription Methods
 
     func validateSubscription() async throws {
+        AuthLogger.log("validateSubscription called")
+
         // Try UserDefaults first, then Keychain
         var accessToken = UserDefaults.standard.string(forKey: "supabase_access_token")
         if accessToken == nil {
+            AuthLogger.log("No token in UserDefaults, checking Keychain...")
             accessToken = getFromKeychain(service: "riff", account: "supabase_access_token")
         }
 
         guard let token = accessToken else {
+            AuthLogger.log("ERROR: No access token available for subscription validation")
             throw AuthError.notAuthenticated
         }
+
+        AuthLogger.log("Token found, calling validate-subscription endpoint")
 
         let url = URL(string: "\(supabaseUrl)/functions/v1/validate-subscription")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.timeoutInterval = 15
 
-        let (data, _) = try await URLSession.shared.data(for: request)
-        let result = try JSONDecoder().decode(SubscriptionResponse.self, from: data)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
 
-        await MainActor.run {
-            self.subscriptionTier = result.tier
-            self.subscriptionStatus = result.status
-            self.quota = QuotaInfo(
-                riffsLimit: result.quota.riffsLimit,
-                riffsUsed: result.quota.riffsUsed,
-                secondsLimit: result.quota.secondsLimit,
-                secondsUsed: result.quota.secondsUsed
-            )
+            if let httpResponse = response as? HTTPURLResponse {
+                AuthLogger.log("Subscription validation response status: \(httpResponse.statusCode)")
+            }
+
+            let result = try JSONDecoder().decode(SubscriptionResponse.self, from: data)
+            AuthLogger.log("Subscription validated: tier=\(result.tier), status=\(result.status)")
+
+            await MainActor.run {
+                self.subscriptionTier = result.tier
+                self.subscriptionStatus = result.status
+                self.quota = QuotaInfo(
+                    riffsLimit: result.quota.riffsLimit,
+                    riffsUsed: result.quota.riffsUsed,
+                    secondsLimit: result.quota.secondsLimit,
+                    secondsUsed: result.quota.secondsUsed
+                )
+            }
+        } catch {
+            AuthLogger.log("ERROR: Subscription validation failed: \(error.localizedDescription)")
+            throw error
         }
     }
 
     // MARK: - IPC with Python
 
     private func loadCachedState() {
-        guard let data = try? Data(contentsOf: authStatePath),
-              let state = try? JSONDecoder().decode(AuthState.self, from: data) else {
+        AuthLogger.log("Loading cached auth state from: \(authStatePath.path)")
+
+        guard FileManager.default.fileExists(atPath: authStatePath.path) else {
+            AuthLogger.log("No auth_state.json found — starting unauthenticated")
             return
         }
 
-        DispatchQueue.main.async {
-            self.isAuthenticated = state.authenticated
-            self.userEmail = state.email
-            self.userId = state.userId
+        do {
+            let data = try Data(contentsOf: authStatePath)
+            let state = try JSONDecoder().decode(AuthState.self, from: data)
+
+            AuthLogger.log("Cached auth state: authenticated=\(state.authenticated), email=\(state.email), timestamp=\(state.timestamp)")
+
+            DispatchQueue.main.async {
+                self.isAuthenticated = state.authenticated
+                self.userEmail = state.email
+                self.userId = state.userId
+            }
+        } catch {
+            AuthLogger.log("ERROR: Failed to load auth_state.json: \(error.localizedDescription)")
         }
     }
 
@@ -279,8 +494,15 @@ class SwiftAuthManager: ObservableObject {
             timestamp: ISO8601DateFormatter().string(from: Date())
         )
 
-        if let data = try? JSONEncoder().encode(state) {
-            try? data.write(to: authStatePath)
+        // Ensure directory exists
+        try? FileManager.default.createDirectory(at: riffDir, withIntermediateDirectories: true)
+
+        do {
+            let data = try JSONEncoder().encode(state)
+            try data.write(to: authStatePath)
+            AuthLogger.log("Auth state written: authenticated=\(authenticated), email=\(email)")
+        } catch {
+            AuthLogger.log("ERROR: Failed to write auth_state.json: \(error.localizedDescription)")
         }
     }
 
@@ -294,6 +516,8 @@ class SwiftAuthManager: ObservableObject {
     // MARK: - Token Management
 
     private func storeTokens(accessToken: String, refreshToken: String) {
+        AuthLogger.log("Storing tokens (access: \(accessToken.prefix(10))..., refresh: \(refreshToken.prefix(10))...)")
+
         // Store in Keychain for Python backend compatibility
         storeInKeychain(service: "riff", account: "supabase_access_token", value: accessToken)
         storeInKeychain(service: "riff", account: "supabase_refresh_token", value: refreshToken)
@@ -301,6 +525,8 @@ class SwiftAuthManager: ObservableObject {
         // Also store in UserDefaults for Swift UI
         UserDefaults.standard.set(accessToken, forKey: "supabase_access_token")
         UserDefaults.standard.set(refreshToken, forKey: "supabase_refresh_token")
+
+        AuthLogger.log("Tokens stored in Keychain + UserDefaults")
     }
 
     private func storeInKeychain(service: String, account: String, value: String) {
@@ -324,7 +550,9 @@ class SwiftAuthManager: ObservableObject {
 
         let status = SecItemAdd(addQuery as CFDictionary, nil)
         if status != errSecSuccess {
-            print("Error storing in keychain: \(status)")
+            AuthLogger.log("ERROR: Keychain store failed for \(account): OSStatus \(status)")
+        } else {
+            AuthLogger.log("Keychain store success for \(account)")
         }
     }
 
@@ -394,10 +622,12 @@ struct AuthResponse: Codable {
 }
 
 struct ErrorResponse: Codable {
-    let errorDescription: String
+    let errorDescription: String?
+    let msg: String?
 
     enum CodingKeys: String, CodingKey {
         case errorDescription = "error_description"
+        case msg
     }
 }
 
@@ -452,6 +682,41 @@ enum AuthError: LocalizedError {
             return message
         case .notAuthenticated:
             return "Not authenticated"
+        }
+    }
+}
+
+// MARK: - Auth Debug Logger
+/// Centralized logger for auth operations — writes to both console and Riff's debug.log
+struct AuthLogger {
+    static let logDir: URL = {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return appSupport.appendingPathComponent("Riff")
+    }()
+
+    static let logFile: URL = {
+        return logDir.appendingPathComponent("debug_auth.log")
+    }()
+
+    static func log(_ message: String) {
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let line = "[\(timestamp)] [Auth] \(message)"
+        print(line)
+
+        // Also append to file for persistent debugging
+        DispatchQueue.global(qos: .utility).async {
+            try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
+            if let data = (line + "\n").data(using: .utf8) {
+                if FileManager.default.fileExists(atPath: logFile.path) {
+                    if let handle = try? FileHandle(forWritingTo: logFile) {
+                        handle.seekToEndOfFile()
+                        handle.write(data)
+                        handle.closeFile()
+                    }
+                } else {
+                    try? data.write(to: logFile)
+                }
+            }
         }
     }
 }

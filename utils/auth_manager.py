@@ -17,29 +17,43 @@ logger = logging.getLogger(__name__)
 
 class AuthManager:
     """Manages authentication, subscription, and quota for Riff"""
-    
+
     def __init__(self, config_manager):
         self.config = config_manager
         self.support_dir = Path.home() / "Library" / "Application Support" / "Riff"
         self.support_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # File paths
         self.auth_state_path = self.support_dir / "auth_state.json"
         self.auth_cache_path = self.support_dir / "auth_cache.json"
-        
+
         # Supabase configuration
         self.supabase_url = self.config.config.get("auth", {}).get("supabase_url", "")
         self.supabase_anon_key = self.config.config.get("auth", {}).get("supabase_anon_key", "")
-        
+
+        logger.info(f"[Auth] Supabase URL: {self.supabase_url}")
+        if "your-project" in self.supabase_url or "your-anon-key" in self.supabase_anon_key:
+            logger.error("[Auth] Supabase credentials are still placeholder defaults! Auth will not work.")
+        else:
+            logger.info(f"[Auth] Supabase anon key: {self.supabase_anon_key[:10]}...")
+
+        # Auth state from IPC (set by Swift UI via auth_state.json)
+        self._auth_email: str = ""
+        self._auth_user_id: str = ""
+        self._auth_authenticated: bool = False
+
         # Cached state
         self._cached_subscription: Optional[Dict[str, Any]] = None
         self._last_validated: Optional[datetime] = None
         self._access_token: Optional[str] = None
         self._refresh_token: Optional[str] = None
-        
+
         # Load cached state
         self._load_cached_state()
         self._load_auth_state()
+
+        logger.info(f"[Auth] Init complete. authenticated={self.is_authenticated}, "
+                     f"email={self._auth_email}, has_cached_sub={self._cached_subscription is not None}")
     
     # ========================================================================
     # Authentication Methods
@@ -55,15 +69,19 @@ class AuthManager:
     def _get_access_token(self) -> Optional[str]:
         """Get access token from keychain or memory"""
         if self._access_token:
+            logger.debug("[Auth] Using cached in-memory access token")
             return self._access_token
-        
+
         try:
             token = keyring.get_password("riff", "supabase_access_token")
             if token:
                 self._access_token = token
+                logger.info(f"[Auth] Access token loaded from keychain ({token[:10]}...)")
+            else:
+                logger.warning("[Auth] No access token found in keychain")
             return token
         except Exception as e:
-            logger.error(f"Error getting access token: {e}")
+            logger.error(f"[Auth] Error reading access token from keychain: {e}")
             return None
     
     def _get_refresh_token(self) -> Optional[str]:
@@ -93,48 +111,108 @@ class AuthManager:
     
     def login(self, email: str, password: str) -> Dict[str, Any]:
         """Login with email and password"""
+        logger.info(f"[Auth] login() called for email: {email}")
+
+        if "your-project" in self.supabase_url:
+            logger.error("[Auth] Cannot login — Supabase URL is a placeholder")
+            return {"success": False, "error": "Supabase credentials not configured"}
+
         url = f"{self.supabase_url}/auth/v1/token?grant_type=password"
         headers = {
             "apikey": self.supabase_anon_key,
             "Content-Type": "application/json"
         }
         data = {"email": email, "password": password}
-        
+
+        logger.info(f"[Auth] POST {url}")
+
         try:
-            response = httpx.post(url, headers=headers, json=data, timeout=10.0)
+            response = httpx.post(url, headers=headers, json=data, timeout=15.0)
+            logger.info(f"[Auth] Login response status: {response.status_code}")
+
+            if response.status_code != 200:
+                error_body = response.text
+                logger.error(f"[Auth] Login failed with status {response.status_code}: {error_body}")
+                return {"success": False, "error": f"Login failed (HTTP {response.status_code}): {error_body}"}
+
             response.raise_for_status()
-            
+
             result = response.json()
             self._store_tokens(result["access_token"], result["refresh_token"])
             self._write_auth_state(True, result["user"]["email"], result["user"]["id"])
-            
-            logger.info(f"Login successful for {email}")
+            self._auth_authenticated = True
+            self._auth_email = result["user"]["email"]
+            self._auth_user_id = result["user"]["id"]
+
+            logger.info(f"[Auth] Login successful for {email}, user_id={result['user']['id']}")
             return {"success": True, "user": result["user"]}
+        except httpx.TimeoutException as e:
+            logger.error(f"[Auth] Login timed out: {e}")
+            return {"success": False, "error": "Request timed out — please try again"}
+        except httpx.ConnectError as e:
+            logger.error(f"[Auth] Login connection error: {e}")
+            return {"success": False, "error": f"Cannot connect to server: {e}"}
         except httpx.HTTPError as e:
-            logger.error(f"Login failed: {e}")
+            logger.error(f"[Auth] Login HTTP error: {e}")
+            return {"success": False, "error": str(e)}
+        except Exception as e:
+            logger.error(f"[Auth] Login unexpected error: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
     
     def signup(self, email: str, password: str) -> Dict[str, Any]:
         """Sign up with email and password"""
+        logger.info(f"[Auth] signup() called for email: {email}")
+
+        if "your-project" in self.supabase_url:
+            logger.error("[Auth] Cannot signup — Supabase URL is a placeholder")
+            return {"success": False, "error": "Supabase credentials not configured"}
+
         url = f"{self.supabase_url}/auth/v1/signup"
         headers = {
             "apikey": self.supabase_anon_key,
             "Content-Type": "application/json"
         }
         data = {"email": email, "password": password}
-        
+
+        logger.info(f"[Auth] POST {url}")
+
         try:
-            response = httpx.post(url, headers=headers, json=data, timeout=10.0)
-            response.raise_for_status()
-            
+            response = httpx.post(url, headers=headers, json=data, timeout=15.0)
+            logger.info(f"[Auth] Signup response status: {response.status_code}")
+
+            if response.status_code not in (200, 201):
+                error_body = response.text
+                logger.error(f"[Auth] Signup failed with status {response.status_code}: {error_body}")
+                return {"success": False, "error": f"Signup failed (HTTP {response.status_code}): {error_body}"}
+
             result = response.json()
+
+            # Check if email confirmation is required (no tokens returned)
+            access_token = result.get("access_token", "")
+            if not access_token:
+                logger.info(f"[Auth] Signup successful but email confirmation required for {email}")
+                return {"success": True, "confirmation_required": True,
+                        "message": f"Check your email! Confirmation link sent to {email}."}
+
             self._store_tokens(result["access_token"], result["refresh_token"])
             self._write_auth_state(True, result["user"]["email"], result["user"]["id"])
-            
-            logger.info(f"Signup successful for {email}")
+            self._auth_authenticated = True
+            self._auth_email = result["user"]["email"]
+            self._auth_user_id = result["user"]["id"]
+
+            logger.info(f"[Auth] Signup successful for {email}, user_id={result['user']['id']}")
             return {"success": True, "user": result["user"]}
+        except httpx.TimeoutException as e:
+            logger.error(f"[Auth] Signup timed out: {e}")
+            return {"success": False, "error": "Request timed out — please try again"}
+        except httpx.ConnectError as e:
+            logger.error(f"[Auth] Signup connection error: {e}")
+            return {"success": False, "error": f"Cannot connect to server: {e}"}
         except httpx.HTTPError as e:
-            logger.error(f"Signup failed: {e}")
+            logger.error(f"[Auth] Signup HTTP error: {e}")
+            return {"success": False, "error": str(e)}
+        except Exception as e:
+            logger.error(f"[Auth] Signup unexpected error: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
     
     def logout(self):
@@ -154,27 +232,33 @@ class AuthManager:
     
     def refresh_token(self) -> bool:
         """Refresh access token using refresh token"""
+        logger.info("[Auth] Attempting token refresh")
         refresh_token = self._get_refresh_token()
         if not refresh_token:
+            logger.warning("[Auth] No refresh token available — cannot refresh")
             return False
-        
+
         url = f"{self.supabase_url}/auth/v1/token?grant_type=refresh_token"
         headers = {
             "apikey": self.supabase_anon_key,
             "Content-Type": "application/json"
         }
         data = {"refresh_token": refresh_token}
-        
+
         try:
-            response = httpx.post(url, headers=headers, json=data, timeout=10.0)
+            response = httpx.post(url, headers=headers, json=data, timeout=15.0)
+            logger.info(f"[Auth] Token refresh response status: {response.status_code}")
             response.raise_for_status()
-            
+
             result = response.json()
             self._store_tokens(result["access_token"], result["refresh_token"])
-            logger.info("Token refreshed successfully")
+            logger.info("[Auth] Token refreshed successfully")
             return True
+        except httpx.TimeoutException as e:
+            logger.error(f"[Auth] Token refresh timed out: {e}")
+            return False
         except httpx.HTTPError as e:
-            logger.error(f"Token refresh failed: {e}")
+            logger.error(f"[Auth] Token refresh failed: {e}")
             return False
     
     # ========================================================================
@@ -215,28 +299,48 @@ class AuthManager:
         """Call validate-subscription Edge Function"""
         access_token = self._get_access_token()
         if not access_token:
-            logger.error("No access token available")
+            logger.error("[Auth] No access token available for subscription validation")
             return None
-        
+
         url = f"{self.supabase_url}/functions/v1/validate-subscription"
         headers = {
             "Authorization": f"Bearer {access_token}",
             "apikey": self.supabase_anon_key
         }
-        
+
+        logger.info(f"[Auth] POST {url}")
+
         try:
-            response = httpx.post(url, headers=headers, timeout=10.0)
+            response = httpx.post(url, headers=headers, timeout=15.0)
+            logger.info(f"[Auth] Subscription validation response status: {response.status_code}")
+
+            if response.status_code == 401:
+                logger.warning("[Auth] Token expired (401), attempting refresh...")
+                if self.refresh_token():
+                    # Retry with new token
+                    access_token = self._get_access_token()
+                    headers["Authorization"] = f"Bearer {access_token}"
+                    response = httpx.post(url, headers=headers, timeout=15.0)
+                    logger.info(f"[Auth] Retry response status: {response.status_code}")
+                else:
+                    logger.error("[Auth] Token refresh failed — user needs to re-login")
+                    return None
+
             response.raise_for_status()
-            
+
             result = response.json()
             self._cached_subscription = result
             self._last_validated = datetime.now()
             self._save_cache()
-            
-            logger.info(f"Subscription validated: tier={result.get('tier')}, status={result.get('status')}")
+
+            logger.info(f"[Auth] Subscription validated: tier={result.get('tier')}, status={result.get('status')}, "
+                        f"riffs_used={result.get('quota', {}).get('riffs_used', 'N/A')}")
             return result
+        except httpx.TimeoutException as e:
+            logger.error(f"[Auth] Subscription validation timed out: {e}")
+            return None
         except httpx.HTTPError as e:
-            logger.error(f"Subscription validation failed: {e}")
+            logger.error(f"[Auth] Subscription validation failed: {e}")
             return None
     
     def can_riff(self) -> Tuple[bool, str]:
@@ -385,17 +489,28 @@ class AuthManager:
     # ========================================================================
     
     def _load_auth_state(self):
-        """Load auth state from auth_state.json (written by Swift)"""
+        """Load auth state from auth_state.json (written by Swift UI)"""
         try:
             if self.auth_state_path.exists():
                 with open(self.auth_state_path, 'r') as f:
                     state = json.load(f)
-                    logger.info(f"Loaded auth state: authenticated={state.get('authenticated')}")
+
+                self._auth_authenticated = state.get("authenticated", False)
+                self._auth_email = state.get("email", "")
+                self._auth_user_id = state.get("user_id", "")
+                timestamp = state.get("timestamp", "unknown")
+
+                logger.info(f"[Auth] Loaded auth_state.json: authenticated={self._auth_authenticated}, "
+                            f"email={self._auth_email}, user_id={self._auth_user_id}, timestamp={timestamp}")
+            else:
+                logger.info("[Auth] No auth_state.json found — user has not logged in via Swift UI yet")
+        except json.JSONDecodeError as e:
+            logger.error(f"[Auth] auth_state.json is corrupted (invalid JSON): {e}")
         except Exception as e:
-            logger.error(f"Error loading auth state: {e}")
+            logger.error(f"[Auth] Error loading auth_state.json: {e}")
     
     def _write_auth_state(self, authenticated: bool, email: str, user_id: str):
-        """Write auth state to auth_state.json for Swift"""
+        """Write auth state to auth_state.json for Swift UI IPC"""
         state = {
             "authenticated": authenticated,
             "email": email,
@@ -405,8 +520,9 @@ class AuthManager:
         try:
             with open(self.auth_state_path, 'w') as f:
                 json.dump(state, f, indent=2)
+            logger.info(f"[Auth] Wrote auth_state.json: authenticated={authenticated}, email={email}")
         except Exception as e:
-            logger.error(f"Error writing auth state: {e}")
+            logger.error(f"[Auth] Error writing auth_state.json: {e}")
     
     def _load_cached_state(self):
         """Load cached subscription data"""
@@ -417,8 +533,14 @@ class AuthManager:
                     self._cached_subscription = cache.get("subscription")
                     if cache.get("last_validated"):
                         self._last_validated = datetime.fromisoformat(cache["last_validated"])
+                    logger.info(f"[Auth] Loaded subscription cache: tier={self._cached_subscription.get('tier') if self._cached_subscription else 'None'}, "
+                                f"last_validated={self._last_validated}")
+            else:
+                logger.info("[Auth] No subscription cache file found")
+        except json.JSONDecodeError as e:
+            logger.error(f"[Auth] Subscription cache is corrupted (invalid JSON): {e}")
         except Exception as e:
-            logger.error(f"Error loading cache: {e}")
+            logger.error(f"[Auth] Error loading subscription cache: {e}")
     
     def _save_cache(self):
         """Save subscription cache"""

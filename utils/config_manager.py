@@ -147,8 +147,6 @@ class ConfigManager:
         
         target[keys[-1]] = value
         self.save()
-
-        self.save()
         return self.config
 
     def get_api_key(self):
