@@ -44,8 +44,8 @@ class SwiftAuthManager: ObservableObject {
         self.riffDir = riffDir
 
         // Load config to get Supabase credentials
-        var url = "https://your-project.supabase.co"
-        var key = "your-anon-key"
+        var url = "https://yrsviodciuepunofxoja.supabase.co"
+        var key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inlyc3Zpb2RjaXVlcHVub2Z4b2phIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Mzk1OTY1ODksImV4cCI6MjA1NTE3MjU4OX0.7f_q_xbFZNOB3Gqk-PL78gQ2jEZ_CivfCk1n_JJsMbE"
 
         AuthLogger.log("Loading config from: \(configPath.path)")
 

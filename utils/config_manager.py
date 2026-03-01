@@ -40,8 +40,8 @@ class ConfigManager:
             "style_counts": {}  # Track usage per style
         },
         "auth": {
-            "supabase_url": "https://your-project.supabase.co",
-            "supabase_anon_key": "your-anon-key-here"
+            "supabase_url": "https://yrsviodciuepunofxoja.supabase.co",
+            "supabase_anon_key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inlyc3Zpb2RjaXVlcHVub2Z4b2phIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Mzk1OTY1ODksImV4cCI6MjA1NTE3MjU4OX0.7f_q_xbFZNOB3Gqk-PL78gQ2jEZ_CivfCk1n_JJsMbE"
         },
         "device": {
             "device_id": ""  # Auto-generated on first run
@@ -92,6 +92,13 @@ class ConfigManager:
         if self.config.get("api", {}).get("llm_model") == "llama3-8b-8192":
             print("[Config] Migrating deprecated model llama3-8b-8192 to llama-3.3-70b-versatile")
             self.set("api.llm_model", "llama-3.3-70b-versatile")
+
+        # Migration: Replace placeholder Supabase credentials with real ones
+        auth = self.config.get("auth", {})
+        if "your-project" in auth.get("supabase_url", "") or "your-anon-key" in auth.get("supabase_anon_key", ""):
+            print("[Config] Migrating placeholder Supabase credentials to real project values")
+            self.set("auth.supabase_url", self.DEFAULT_CONFIG["auth"]["supabase_url"])
+            self.set("auth.supabase_anon_key", self.DEFAULT_CONFIG["auth"]["supabase_anon_key"])
             
         return self.config
 
