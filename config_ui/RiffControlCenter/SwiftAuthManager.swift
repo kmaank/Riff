@@ -86,11 +86,11 @@ class SwiftAuthManager: ObservableObject {
     func signInWithEmail(email: String, password: String) async throws {
         AuthLogger.log("signInWithEmail called for: \(email)")
 
-        // Validate credentials before attempting
         guard hasValidCredentials else {
             AuthLogger.log("ERROR: Cannot sign in — Supabase credentials are placeholder defaults")
+            AuthLogger.log("  supabase_url=\(supabaseUrl)")
             await MainActor.run {
-                self.errorMessage = "App not configured: Supabase credentials are missing. Please contact support."
+                self.errorMessage = "Login unavailable. Please reinstall or contact support."
                 self.isLoading = false
             }
             throw AuthError.loginFailed("Supabase credentials not configured")
@@ -108,7 +108,7 @@ class SwiftAuthManager: ObservableObject {
             AuthLogger.log("ERROR: Invalid URL: \(endpoint)")
             await MainActor.run {
                 self.isLoading = false
-                self.errorMessage = "Invalid server URL configuration"
+                self.errorMessage = "Something went wrong. Check debug_auth.log."
             }
             throw AuthError.loginFailed("Invalid URL")
         }
@@ -126,10 +126,10 @@ class SwiftAuthManager: ObservableObject {
             let (data, response) = try await URLSession.shared.data(for: request)
 
             guard let httpResponse = response as? HTTPURLResponse else {
-                AuthLogger.log("ERROR: Response is not HTTP")
+                AuthLogger.log("ERROR: Response is not HTTPURLResponse")
                 await MainActor.run {
                     self.isLoading = false
-                    self.errorMessage = "Invalid server response"
+                    self.errorMessage = "Login failed. Check debug_auth.log."
                 }
                 throw AuthError.invalidResponse
             }
@@ -147,63 +147,61 @@ class SwiftAuthManager: ObservableObject {
                     self.isLoading = false
                 }
 
-                // Write auth state for Python
                 writeAuthState(authenticated: true, email: result.user.email, userId: result.user.id)
-
-                // Store tokens securely
                 storeTokens(accessToken: result.accessToken, refreshToken: result.refreshToken)
-            } else if httpResponse.statusCode == 503 || httpResponse.statusCode == 540 {
-                AuthLogger.log("Supabase project appears paused or unavailable (HTTP \(httpResponse.statusCode))")
-                await MainActor.run {
-                    self.isLoading = false
-                    self.errorMessage = "Supabase project is paused. Go to supabase.com/dashboard to unpause it, then try again."
-                }
-                throw AuthError.loginFailed("Supabase project paused")
             } else {
                 let responseBody = String(data: data, encoding: .utf8) ?? "<non-utf8>"
-                AuthLogger.log("Login failed with status \(httpResponse.statusCode): \(responseBody)")
+                AuthLogger.log("Login failed HTTP \(httpResponse.statusCode): \(responseBody)")
 
-                let error = try? JSONDecoder().decode(ErrorResponse.self, from: data)
-                let message = error?.errorDescription ?? error?.msg ?? "Login failed (HTTP \(httpResponse.statusCode))"
+                let decoded = try? JSONDecoder().decode(ErrorResponse.self, from: data)
+                // Show Supabase's user-facing message (e.g. "Invalid login credentials") if available
+                let userMessage = decoded?.errorDescription ?? decoded?.msg ?? "Login failed. Please try again."
+                AuthLogger.log("User-facing error: \(userMessage)")
                 await MainActor.run {
                     self.isLoading = false
-                    self.errorMessage = message
+                    self.errorMessage = userMessage
                 }
-                throw AuthError.loginFailed(message)
+                throw AuthError.loginFailed(userMessage)
             }
         } catch let error as AuthError {
-            // Re-throw auth errors (already handled above)
             throw error
         } catch {
-            // Network errors, timeouts, DNS failures, etc.
             let nsError = error as NSError
             AuthLogger.log("ERROR: Network error during login: code=\(nsError.code), domain=\(nsError.domain), description=\(error.localizedDescription)")
-            let message: String
+            AuthLogger.log("ERROR: Full error: \(nsError)")
+
+            // Run connectivity diagnostic in background for the log
+            Self.logNetworkDiagnostic(url: supabaseUrl)
+
+            let userMessage: String
             if nsError.code == NSURLErrorNotConnectedToInternet {
-                message = "No internet connection"
+                userMessage = "No internet connection."
             } else if nsError.code == NSURLErrorTimedOut {
-                message = "Request timed out. Your Supabase project may be paused — go to supabase.com/dashboard to check, then try again."
+                AuthLogger.log("DIAGNOSTIC: Request timed out after 30s. Possible causes: Supabase project paused, firewall blocking, or server unreachable.")
+                AuthLogger.log("DIAGNOSTIC: Supabase URL=\(supabaseUrl)")
+                userMessage = "Connection timed out. Please try again."
             } else if nsError.code == NSURLErrorCannotFindHost {
-                message = "Cannot reach server — check your Supabase URL configuration"
+                AuthLogger.log("DIAGNOSTIC: DNS resolution failed for \(supabaseUrl)")
+                userMessage = "Cannot reach server. Please try again."
             } else {
-                message = "Connection error: \(error.localizedDescription)"
+                userMessage = "Connection error. Please try again."
             }
             await MainActor.run {
                 self.isLoading = false
-                self.errorMessage = message
+                self.errorMessage = userMessage
             }
-            throw AuthError.loginFailed(message)
+            throw AuthError.loginFailed(userMessage)
         }
     }
 
     func signUpWithEmail(email: String, password: String) async throws {
         AuthLogger.log("signUpWithEmail called for: \(email)")
 
-        // Validate credentials before attempting
         guard hasValidCredentials else {
             AuthLogger.log("ERROR: Cannot sign up — Supabase credentials are placeholder defaults")
+            AuthLogger.log("  supabase_url=\(supabaseUrl)")
             await MainActor.run {
-                self.errorMessage = "App not configured: Supabase credentials are missing. Please contact support."
+                self.errorMessage = "Signup unavailable. Please reinstall or contact support."
                 self.isLoading = false
             }
             throw AuthError.signupFailed("Supabase credentials not configured")
@@ -221,7 +219,7 @@ class SwiftAuthManager: ObservableObject {
             AuthLogger.log("ERROR: Invalid URL: \(endpoint)")
             await MainActor.run {
                 self.isLoading = false
-                self.errorMessage = "Invalid server URL configuration"
+                self.errorMessage = "Something went wrong. Check debug_auth.log."
             }
             throw AuthError.signupFailed("Invalid URL")
         }
@@ -239,10 +237,10 @@ class SwiftAuthManager: ObservableObject {
             let (data, response) = try await URLSession.shared.data(for: request)
 
             guard let httpResponse = response as? HTTPURLResponse else {
-                AuthLogger.log("ERROR: Response is not HTTP")
+                AuthLogger.log("ERROR: Response is not HTTPURLResponse")
                 await MainActor.run {
                     self.isLoading = false
-                    self.errorMessage = "Invalid server response"
+                    self.errorMessage = "Signup failed. Check debug_auth.log."
                 }
                 throw AuthError.invalidResponse
             }
@@ -250,10 +248,8 @@ class SwiftAuthManager: ObservableObject {
             AuthLogger.log("Response status: \(httpResponse.statusCode)")
 
             if httpResponse.statusCode == 200 || httpResponse.statusCode == 201 {
-                // Supabase signup may return user without tokens if email confirmation is required
                 if let result = try? JSONDecoder().decode(AuthResponse.self, from: data),
                    !result.accessToken.isEmpty {
-                    // Tokens present — user is immediately authenticated (no email confirmation)
                     AuthLogger.log("Signup successful with immediate auth for user: \(result.user.id)")
 
                     await MainActor.run {
@@ -266,57 +262,97 @@ class SwiftAuthManager: ObservableObject {
                     writeAuthState(authenticated: true, email: result.user.email, userId: result.user.id)
                     storeTokens(accessToken: result.accessToken, refreshToken: result.refreshToken)
                 } else {
-                    // No tokens — email confirmation is required
-                    AuthLogger.log("Signup successful but email confirmation required")
-
                     let responseBody = String(data: data, encoding: .utf8) ?? "<non-utf8>"
-                    AuthLogger.log("Signup response body: \(responseBody)")
+                    AuthLogger.log("Signup OK but email confirmation required. Response: \(responseBody)")
 
                     await MainActor.run {
                         self.isLoading = false
                         self.errorMessage = "Check your email! We sent a confirmation link to \(email)."
                     }
-                    // Don't throw — this is a success state, not an error
                 }
-            } else if httpResponse.statusCode == 503 || httpResponse.statusCode == 540 {
-                AuthLogger.log("Supabase project appears paused or unavailable (HTTP \(httpResponse.statusCode))")
-                await MainActor.run {
-                    self.isLoading = false
-                    self.errorMessage = "Supabase project is paused. Go to supabase.com/dashboard to unpause it, then try again."
-                }
-                throw AuthError.signupFailed("Supabase project paused")
             } else {
                 let responseBody = String(data: data, encoding: .utf8) ?? "<non-utf8>"
-                AuthLogger.log("Signup failed with status \(httpResponse.statusCode): \(responseBody)")
+                AuthLogger.log("Signup failed HTTP \(httpResponse.statusCode): \(responseBody)")
 
-                let error = try? JSONDecoder().decode(ErrorResponse.self, from: data)
-                let message = error?.errorDescription ?? error?.msg ?? "Signup failed (HTTP \(httpResponse.statusCode))"
+                let decoded = try? JSONDecoder().decode(ErrorResponse.self, from: data)
+                let userMessage = decoded?.errorDescription ?? decoded?.msg ?? "Signup failed. Please try again."
+                AuthLogger.log("User-facing error: \(userMessage)")
                 await MainActor.run {
                     self.isLoading = false
-                    self.errorMessage = message
+                    self.errorMessage = userMessage
                 }
-                throw AuthError.signupFailed(message)
+                throw AuthError.signupFailed(userMessage)
             }
         } catch let error as AuthError {
             throw error
         } catch {
             let nsError = error as NSError
             AuthLogger.log("ERROR: Network error during signup: code=\(nsError.code), domain=\(nsError.domain), description=\(error.localizedDescription)")
-            let message: String
+            AuthLogger.log("ERROR: Full error: \(nsError)")
+
+            Self.logNetworkDiagnostic(url: supabaseUrl)
+
+            let userMessage: String
             if nsError.code == NSURLErrorNotConnectedToInternet {
-                message = "No internet connection"
+                userMessage = "No internet connection."
             } else if nsError.code == NSURLErrorTimedOut {
-                message = "Request timed out. Your Supabase project may be paused — go to supabase.com/dashboard to check, then try again."
+                AuthLogger.log("DIAGNOSTIC: Request timed out after 30s. Possible causes: Supabase project paused, firewall blocking, or server unreachable.")
+                AuthLogger.log("DIAGNOSTIC: Supabase URL=\(supabaseUrl)")
+                userMessage = "Connection timed out. Please try again."
             } else if nsError.code == NSURLErrorCannotFindHost {
-                message = "Cannot reach server — check your Supabase URL configuration"
+                AuthLogger.log("DIAGNOSTIC: DNS resolution failed for \(supabaseUrl)")
+                userMessage = "Cannot reach server. Please try again."
             } else {
-                message = "Connection error: \(error.localizedDescription)"
+                userMessage = "Connection error. Please try again."
             }
             await MainActor.run {
                 self.isLoading = false
-                self.errorMessage = message
+                self.errorMessage = userMessage
             }
-            throw AuthError.signupFailed(message)
+            throw AuthError.signupFailed(userMessage)
+        }
+    }
+
+    /// Fire-and-forget connectivity diagnostic written only to debug_auth.log
+    static func logNetworkDiagnostic(url: String) {
+        DispatchQueue.global(qos: .utility).async {
+            AuthLogger.log("--- Network Diagnostic Start ---")
+            AuthLogger.log("DIAGNOSTIC: Target URL: \(url)")
+
+            // Quick HEAD request to check basic reachability
+            guard let testUrl = URL(string: url) else {
+                AuthLogger.log("DIAGNOSTIC: Invalid URL — cannot run diagnostic")
+                AuthLogger.log("--- Network Diagnostic End ---")
+                return
+            }
+
+            var req = URLRequest(url: testUrl)
+            req.httpMethod = "HEAD"
+            req.timeoutInterval = 10
+
+            let semaphore = DispatchSemaphore(value: 0)
+            var diagResult = ""
+
+            let task = URLSession.shared.dataTask(with: req) { _, response, error in
+                if let error = error {
+                    let nsErr = error as NSError
+                    diagResult = "FAILED: code=\(nsErr.code), domain=\(nsErr.domain), desc=\(error.localizedDescription)"
+                } else if let http = response as? HTTPURLResponse {
+                    diagResult = "OK: HTTP \(http.statusCode)"
+                } else {
+                    diagResult = "UNEXPECTED: non-HTTP response"
+                }
+                semaphore.signal()
+            }
+            task.resume()
+            _ = semaphore.wait(timeout: .now() + 12)
+
+            if diagResult.isEmpty {
+                diagResult = "TIMEOUT: HEAD request did not complete in 12s"
+            }
+
+            AuthLogger.log("DIAGNOSTIC: HEAD \(url) → \(diagResult)")
+            AuthLogger.log("--- Network Diagnostic End ---")
         }
     }
 
@@ -326,7 +362,7 @@ class SwiftAuthManager: ObservableObject {
         guard hasValidCredentials else {
             AuthLogger.log("ERROR: Cannot use OAuth — Supabase credentials are placeholder defaults")
             DispatchQueue.main.async {
-                self.errorMessage = "App not configured: Supabase credentials are missing."
+                self.errorMessage = "Login unavailable. Please reinstall or contact support."
             }
             return
         }
