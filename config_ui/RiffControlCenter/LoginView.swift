@@ -72,10 +72,10 @@ struct LoginView: View {
                     let isInfo = message.starts(with: "Check your email")
                     HStack {
                         Image(systemName: isInfo ? "envelope.circle.fill" : "exclamationmark.triangle.fill")
-                            .foregroundStyle(isInfo ? .green : .red)
+                            .foregroundColor(isInfo ? .green : .red)
                         Text(message)
                             .font(.caption)
-                            .foregroundStyle(isInfo ? .primary : .red)
+                            .foregroundColor(isInfo ? Color(NSColor.labelColor) : .red)
                     }
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
