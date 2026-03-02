@@ -810,11 +810,12 @@ enum AuthError: LocalizedError {
 }
 
 // MARK: - Auth Debug Logger
-/// Centralized logger for auth operations — writes to both console and Riff's debug.log
+/// Centralized logger for auth operations — writes to ~/Documents/Riff/debug_auth.log
+/// (same directory as Python's debug.log and activity.log)
 struct AuthLogger {
     static let logDir: URL = {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return appSupport.appendingPathComponent("Riff")
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return home.appendingPathComponent("Documents/Riff")
     }()
 
     static let logFile: URL = {
