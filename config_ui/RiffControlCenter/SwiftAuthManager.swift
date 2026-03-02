@@ -79,6 +79,73 @@ class SwiftAuthManager: ObservableObject {
         startAuthStateMonitor()
 
         AuthLogger.log("SwiftAuthManager initialized. isAuthenticated=\(isAuthenticated), email=\(userEmail)")
+
+        // Fire a background connectivity check on startup — results go to debug_auth.log only
+        runStartupConnectivityCheck()
+    }
+
+    /// Quick background check on startup to verify Supabase is reachable.
+    /// Results are written only to debug_auth.log — never shown in the UI.
+    private func runStartupConnectivityCheck() {
+        let targetUrl = supabaseUrl
+        let anonKey = supabaseAnonKey
+        DispatchQueue.global(qos: .utility).async {
+            AuthLogger.log("=== Startup Connectivity Check ===")
+            AuthLogger.log("Target: \(targetUrl)")
+
+            // 1. DNS check — can we resolve the host?
+            let host = URL(string: targetUrl)?.host ?? "unknown"
+            AuthLogger.log("Resolving DNS for: \(host)")
+            let hostRef = CFHostCreateWithName(nil, host as CFString).takeRetainedValue()
+            var resolved = DarwinBoolean(false)
+            CFHostStartInfoResolution(hostRef, .addresses, nil)
+            let addresses = CFHostGetAddressing(hostRef, &resolved)?.takeUnretainedValue() as? [Data]
+            if resolved.boolValue, let addrs = addresses, !addrs.isEmpty {
+                AuthLogger.log("DNS OK: \(host) resolved to \(addrs.count) address(es)")
+            } else {
+                AuthLogger.log("DNS FAILED: Could not resolve \(host)")
+                AuthLogger.log("=== Connectivity Check Done (DNS failure) ===")
+                return
+            }
+
+            // 2. HTTP check — can we reach the Supabase health endpoint?
+            guard let healthUrl = URL(string: "\(targetUrl)/auth/v1/health") else {
+                AuthLogger.log("ERROR: Invalid health URL")
+                AuthLogger.log("=== Connectivity Check Done ===")
+                return
+            }
+
+            var req = URLRequest(url: healthUrl)
+            req.httpMethod = "GET"
+            req.setValue(anonKey, forHTTPHeaderField: "apikey")
+            req.setValue("Bearer \(anonKey)", forHTTPHeaderField: "Authorization")
+            req.timeoutInterval = 10
+
+            let semaphore = DispatchSemaphore(value: 0)
+            var result = ""
+
+            let task = URLSession.shared.dataTask(with: req) { data, response, error in
+                if let error = error {
+                    let nsErr = error as NSError
+                    result = "FAILED: code=\(nsErr.code), domain=\(nsErr.domain), \(error.localizedDescription)"
+                } else if let http = response as? HTTPURLResponse {
+                    let body = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                    result = "HTTP \(http.statusCode): \(body.prefix(200))"
+                } else {
+                    result = "UNEXPECTED: non-HTTP response"
+                }
+                semaphore.signal()
+            }
+            task.resume()
+            _ = semaphore.wait(timeout: .now() + 12)
+
+            if result.isEmpty {
+                result = "TIMEOUT: No response in 12s"
+            }
+
+            AuthLogger.log("Health check result: \(result)")
+            AuthLogger.log("=== Connectivity Check Done ===")
+        }
     }
 
     // MARK: - Authentication Methods
@@ -116,11 +183,14 @@ class SwiftAuthManager: ObservableObject {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(supabaseAnonKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 30
 
         let body: [String: Any] = ["email": email, "password": password]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        AuthLogger.log("Request headers: apikey=\(supabaseAnonKey.prefix(20))..., Authorization=Bearer ..., Content-Type=application/json")
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -129,12 +199,13 @@ class SwiftAuthManager: ObservableObject {
                 AuthLogger.log("ERROR: Response is not HTTPURLResponse")
                 await MainActor.run {
                     self.isLoading = false
-                    self.errorMessage = "Login failed. Check debug_auth.log."
+                    self.errorMessage = "Login failed. Please try again."
                 }
                 throw AuthError.invalidResponse
             }
 
             AuthLogger.log("Response status: \(httpResponse.statusCode)")
+            AuthLogger.log("Response headers: \(httpResponse.allHeaderFields)")
 
             if httpResponse.statusCode == 200 {
                 let result = try JSONDecoder().decode(AuthResponse.self, from: data)
@@ -154,7 +225,6 @@ class SwiftAuthManager: ObservableObject {
                 AuthLogger.log("Login failed HTTP \(httpResponse.statusCode): \(responseBody)")
 
                 let decoded = try? JSONDecoder().decode(ErrorResponse.self, from: data)
-                // Show Supabase's user-facing message (e.g. "Invalid login credentials") if available
                 let userMessage = decoded?.errorDescription ?? decoded?.msg ?? "Login failed. Please try again."
                 AuthLogger.log("User-facing error: \(userMessage)")
                 await MainActor.run {
@@ -168,17 +238,15 @@ class SwiftAuthManager: ObservableObject {
         } catch {
             let nsError = error as NSError
             AuthLogger.log("ERROR: Network error during login: code=\(nsError.code), domain=\(nsError.domain), description=\(error.localizedDescription)")
-            AuthLogger.log("ERROR: Full error: \(nsError)")
+            AuthLogger.log("ERROR: Full error userInfo: \(nsError.userInfo)")
 
-            // Run connectivity diagnostic in background for the log
             Self.logNetworkDiagnostic(url: supabaseUrl)
 
             let userMessage: String
             if nsError.code == NSURLErrorNotConnectedToInternet {
                 userMessage = "No internet connection."
             } else if nsError.code == NSURLErrorTimedOut {
-                AuthLogger.log("DIAGNOSTIC: Request timed out after 30s. Possible causes: Supabase project paused, firewall blocking, or server unreachable.")
-                AuthLogger.log("DIAGNOSTIC: Supabase URL=\(supabaseUrl)")
+                AuthLogger.log("DIAGNOSTIC: Request timed out after 30s to \(supabaseUrl)")
                 userMessage = "Connection timed out. Please try again."
             } else if nsError.code == NSURLErrorCannotFindHost {
                 AuthLogger.log("DIAGNOSTIC: DNS resolution failed for \(supabaseUrl)")
@@ -219,7 +287,7 @@ class SwiftAuthManager: ObservableObject {
             AuthLogger.log("ERROR: Invalid URL: \(endpoint)")
             await MainActor.run {
                 self.isLoading = false
-                self.errorMessage = "Something went wrong. Check debug_auth.log."
+                self.errorMessage = "Something went wrong. Please try again."
             }
             throw AuthError.signupFailed("Invalid URL")
         }
@@ -227,11 +295,14 @@ class SwiftAuthManager: ObservableObject {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(supabaseAnonKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 30
 
         let body: [String: Any] = ["email": email, "password": password]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        AuthLogger.log("Request headers: apikey=\(supabaseAnonKey.prefix(20))..., Authorization=Bearer ..., Content-Type=application/json")
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -240,12 +311,13 @@ class SwiftAuthManager: ObservableObject {
                 AuthLogger.log("ERROR: Response is not HTTPURLResponse")
                 await MainActor.run {
                     self.isLoading = false
-                    self.errorMessage = "Signup failed. Check debug_auth.log."
+                    self.errorMessage = "Signup failed. Please try again."
                 }
                 throw AuthError.invalidResponse
             }
 
             AuthLogger.log("Response status: \(httpResponse.statusCode)")
+            AuthLogger.log("Response headers: \(httpResponse.allHeaderFields)")
 
             if httpResponse.statusCode == 200 || httpResponse.statusCode == 201 {
                 if let result = try? JSONDecoder().decode(AuthResponse.self, from: data),
@@ -288,7 +360,7 @@ class SwiftAuthManager: ObservableObject {
         } catch {
             let nsError = error as NSError
             AuthLogger.log("ERROR: Network error during signup: code=\(nsError.code), domain=\(nsError.domain), description=\(error.localizedDescription)")
-            AuthLogger.log("ERROR: Full error: \(nsError)")
+            AuthLogger.log("ERROR: Full error userInfo: \(nsError.userInfo)")
 
             Self.logNetworkDiagnostic(url: supabaseUrl)
 
@@ -296,8 +368,7 @@ class SwiftAuthManager: ObservableObject {
             if nsError.code == NSURLErrorNotConnectedToInternet {
                 userMessage = "No internet connection."
             } else if nsError.code == NSURLErrorTimedOut {
-                AuthLogger.log("DIAGNOSTIC: Request timed out after 30s. Possible causes: Supabase project paused, firewall blocking, or server unreachable.")
-                AuthLogger.log("DIAGNOSTIC: Supabase URL=\(supabaseUrl)")
+                AuthLogger.log("DIAGNOSTIC: Request timed out after 30s to \(supabaseUrl)")
                 userMessage = "Connection timed out. Please try again."
             } else if nsError.code == NSURLErrorCannotFindHost {
                 AuthLogger.log("DIAGNOSTIC: DNS resolution failed for \(supabaseUrl)")

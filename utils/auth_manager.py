@@ -120,6 +120,7 @@ class AuthManager:
         url = f"{self.supabase_url}/auth/v1/token?grant_type=password"
         headers = {
             "apikey": self.supabase_anon_key,
+            "Authorization": f"Bearer {self.supabase_anon_key}",
             "Content-Type": "application/json"
         }
         data = {"email": email, "password": password}
@@ -170,6 +171,7 @@ class AuthManager:
         url = f"{self.supabase_url}/auth/v1/signup"
         headers = {
             "apikey": self.supabase_anon_key,
+            "Authorization": f"Bearer {self.supabase_anon_key}",
             "Content-Type": "application/json"
         }
         data = {"email": email, "password": password}
@@ -241,6 +243,7 @@ class AuthManager:
         url = f"{self.supabase_url}/auth/v1/token?grant_type=refresh_token"
         headers = {
             "apikey": self.supabase_anon_key,
+            "Authorization": f"Bearer {self.supabase_anon_key}",
             "Content-Type": "application/json"
         }
         data = {"refresh_token": refresh_token}
