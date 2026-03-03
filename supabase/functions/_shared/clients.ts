@@ -37,9 +37,20 @@ export function getStripeClient() {
   });
 }
 
-// Get user ID from JWT token
-export async function getUserId(supabase: any): Promise<string | null> {
-  const { data: { user }, error } = await supabase.auth.getUser();
+// Get user ID from JWT token in request
+// Must pass JWT explicitly - getUser() without token does not work reliably in Edge Functions
+export async function getUserId(req: Request): Promise<string | null> {
+  const authHeader = req.headers.get('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return null;
+  }
+
+  const token = authHeader.replace('Bearer ', '');
+  const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+  const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
+
+  const supabase = createClient(supabaseUrl, supabaseAnonKey);
+  const { data: { user }, error } = await supabase.auth.getUser(token);
 
   if (error || !user) {
     return null;

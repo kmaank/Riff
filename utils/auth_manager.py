@@ -68,6 +68,18 @@ class AuthManager:
     
     def _get_access_token(self) -> Optional[str]:
         """Get access token from keychain or memory"""
+        # Respect auth_state.json from Swift - if user logged out, clear cache
+        try:
+            if self.auth_state_path.exists():
+                with open(self.auth_state_path, 'r') as f:
+                    state = json.load(f)
+                if not state.get("authenticated", False):
+                    self._access_token = None
+                    self._refresh_token = None
+                    return None
+        except Exception:
+            pass
+
         if self._access_token:
             logger.debug("[Auth] Using cached in-memory access token")
             return self._access_token

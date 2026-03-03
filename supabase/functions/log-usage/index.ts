@@ -2,7 +2,7 @@
 // Logs a riff (usage tracking) after successful transcription
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
-import { getSupabaseClient, getUserId, corsHeaders } from '../_shared/clients.ts';
+import { getSupabaseServiceClient, getUserId, corsHeaders } from '../_shared/clients.ts';
 
 interface LogUsageRequest {
   word_count: number;
@@ -18,8 +18,7 @@ serve(async (req) => {
   }
 
   try {
-    const supabase = getSupabaseClient(req);
-    const userId = await getUserId(supabase);
+    const userId = await getUserId(req);
 
     if (!userId) {
       return new Response(
@@ -38,7 +37,8 @@ serve(async (req) => {
       );
     }
 
-    // Insert usage log
+    // Insert usage log (service role required - RLS only allows service_role to INSERT)
+    const supabase = getSupabaseServiceClient();
     const { data, error } = await supabase
       .from('usage_logs')
       .insert({

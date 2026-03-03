@@ -12,8 +12,7 @@ serve(async (req) => {
   }
 
   try {
-    const supabase = getSupabaseClient(req);
-    const userId = await getUserId(supabase);
+    const userId = await getUserId(req);
 
     if (!userId) {
       return new Response(
@@ -21,6 +20,8 @@ serve(async (req) => {
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
+
+    const supabase = getSupabaseClient(req);
 
     // Get subscription info
     const { data: subscription, error: subError } = await supabase
@@ -36,29 +37,33 @@ serve(async (req) => {
       );
     }
 
-    // Get monthly usage
-    const { data: usage, error: usageError } = await supabase
+    // Get monthly usage (use maybeSingle - new users have no rows in the view)
+    const { data: usage } = await supabase
       .from('monthly_usage')
       .select('riffs_used, seconds_used')
       .eq('user_id', userId)
-      .single();
+      .maybeSingle();
 
-    const riffsUsed = usage?.riffs_used || 0;
-    const secondsUsed = usage?.seconds_used || 0;
+    const riffsUsed = usage?.riffs_used ?? 0;
+    const secondsUsed = usage?.seconds_used ?? 0;
 
     // Get tier features and limits
     const features = getTierFeatures(subscription.tier);
 
     // Check if managed key is available (for paid tiers)
+    // Note: api_keys table may not exist yet - fail gracefully
     let managedKeyAvailable = false;
     if (!features.byok) {
-      const { data: apiKey } = await supabase
-        .from('api_keys')
-        .select('is_active')
-        .eq('user_id', userId)
-        .single();
-      
-      managedKeyAvailable = apiKey?.is_active || false;
+      try {
+        const { data: apiKey } = await supabase
+          .from('api_keys')
+          .select('is_active')
+          .eq('user_id', userId)
+          .maybeSingle();
+        managedKeyAvailable = apiKey?.is_active || false;
+      } catch {
+        // api_keys table may not exist - managed keys not available
+      }
     }
 
     // Build response

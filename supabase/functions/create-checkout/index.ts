@@ -15,9 +15,7 @@ serve(async (req) => {
   }
 
   try {
-    const supabase = getSupabaseClient(req);
-    const stripe = getStripeClient();
-    const userId = await getUserId(supabase);
+    const userId = await getUserId(req);
 
     if (!userId) {
       return new Response(
@@ -25,6 +23,9 @@ serve(async (req) => {
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
+
+    const supabase = getSupabaseClient(req);
+    const stripe = getStripeClient();
 
     // Parse request
     const body: CheckoutRequest = await req.json();
