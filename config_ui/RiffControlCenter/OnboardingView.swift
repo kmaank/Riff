@@ -1,50 +1,69 @@
 import SwiftUI
 import ApplicationServices
+import AVFoundation
 
 struct OnboardingView: View {
     @EnvironmentObject var settings: SettingsManager
+    @EnvironmentObject var authManager: SwiftAuthManager
     @State private var step = 1
     @State private var apiKeyInput = ""
     @State private var isKeyValid = false
-    @State private var selectedScriptMode = "english_mixed"
-    @State private var testInput = "Click here, hold your trigger key, and speak..."
+    @State private var micGranted = false
+    @State private var testDriveBaseline = 0
+    @State private var testDriveSucceeded = false
+
+    private var paidManagedKey: Bool {
+        authManager.managedKeyAvailable || (authManager.isAuthenticated && authManager.subscriptionTier != "free" && !authManager.subscriptionTier.isEmpty)
+    }
 
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 16) {
+            progress
             if step == 1 {
                 welcomeStep
             } else if step == 2 {
-                apiKeyStep
+                accountStep
             } else if step == 3 {
-                scriptModeStep
+                apiKeyStep
             } else if step == 4 {
-                advancedPermissionsStep
-            } else if step == 5 {
-                testStep
+                permissionsStep
+            } else {
+                testDriveStep
             }
         }
         .padding()
-        .frame(width: 700, height: 500)
+        .frame(minWidth: 640, minHeight: 480)
         .background(Color(.windowBackgroundColor))
+        .onAppear { advanceIfPossible() }
+        .onChange(of: authManager.isAuthenticated) { authenticated in
+            if authenticated && step == 2 {
+                withAnimation { step = paidManagedKey ? 4 : 3 }
+            }
+        }
     }
-    
-    // MARK: - Step 1: Welcome
+
+    var progress: some View {
+        HStack(spacing: 8) {
+            ForEach(1...5, id: \.self) { n in
+                Circle()
+                    .fill(n <= step ? Color.accentColor : Color.gray.opacity(0.25))
+                    .frame(width: 8, height: 8)
+            }
+        }
+        .padding(.top, 8)
+    }
+
     var welcomeStep: some View {
-        VStack(spacing: 30) {
-            Image(nsImage: NSImage(named: "AppIcon") ?? NSImage()) 
+        VStack(spacing: 24) {
+            Image(nsImage: NSImage(named: "AppIcon") ?? NSImage())
                 .resizable()
-                .frame(width: 100, height: 100)
-            
+                .frame(width: 88, height: 88)
             Text("Welcome to Riff")
-                .font(.system(size: 32, weight: .bold))
-            
-            Text("Stop typing like a robot. Start sounding like a human.\nLet's make you lively and riffing in just a minute!")
+                .font(.system(size: 28, weight: .bold))
+            Text("Create an account, grant permissions, and try a riff.\nTakes about a minute.")
                 .multilineTextAlignment(.center)
-                .font(.title3)
                 .foregroundColor(.secondary)
-            
             Spacer()
-            
             Button("Get Started") {
                 withAnimation { step = 2 }
             }
@@ -53,255 +72,171 @@ struct OnboardingView: View {
         }
         .padding()
     }
-    
-    // MARK: - Step 2: API Key
+
+    var accountStep: some View {
+        VStack {
+            LoginView(compact: true)
+            Spacer()
+            HStack {
+                Button("Back") { withAnimation { step = 1 } }
+                Spacer()
+            }
+        }
+        .padding(.horizontal)
+    }
+
     var apiKeyStep: some View {
-        VStack(spacing: 25) {
-            Text("Connect Your Brain")
+        VStack(spacing: 20) {
+            Text("Connect Groq")
                 .font(.title)
                 .fontWeight(.bold)
-            
-            Text("Riff runs on Groq. It’s the only engine fast enough to keep up with your mouth.\nGrab a free key to start the speed.")
+            Text("Free accounts use your own Groq key. Paid plans skip this.")
                 .multilineTextAlignment(.center)
                 .foregroundColor(.secondary)
-            
+
             VStack(alignment: .leading) {
-                Text("Secret Key")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                
+                Text("Secret Key").font(.caption).foregroundColor(.secondary)
                 SecureField("gsk_...", text: $apiKeyInput)
                     .textFieldStyle(.roundedBorder)
                     .onChange(of: apiKeyInput) { newValue in
                         isKeyValid = newValue.trimmingCharacters(in: .whitespaces).starts(with: "gsk_")
                     }
-                
                 Link("Get a free key at console.groq.com", destination: URL(string: "https://console.groq.com/keys")!)
                     .font(.caption)
             }
             .padding(.horizontal)
-            
+
             Spacer()
-            
             HStack {
-                Button("Back") {
-                    withAnimation { step = 1 }
-                }
-                
+                Button("Back") { withAnimation { step = 2 } }
                 Button("Next") {
                     saveKey()
-                    withAnimation { step = 3 }
+                    withAnimation { step = 4 }
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!isKeyValid)
             }
         }
         .padding()
+        .onAppear {
+            if paidManagedKey {
+                withAnimation { step = 4 }
+            }
+            apiKeyInput = settings.config.api.api_key
+            isKeyValid = apiKeyInput.trimmingCharacters(in: .whitespaces).starts(with: "gsk_")
+        }
     }
-    
 
-
-    // MARK: - Step 3: Script Mode Selection
-    var scriptModeStep: some View {
-        VStack(spacing: 25) {
-            Text("Choose Your Script Mode")
+    var permissionsStep: some View {
+        VStack(spacing: 20) {
+            Text("Grant Permissions")
                 .font(.title)
                 .fontWeight(.bold)
-
-            Text("How should Riff handle multilingual dictation?")
+            Text("Accessibility is required for the hotkey. Microphone is required to record.")
                 .multilineTextAlignment(.center)
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
 
-            HStack(spacing: 15) {
-                ScriptModeOnboardingCard(
-                    mode: "english_mixed",
-                    title: "English Mixed",
-                    badge: "Recommended",
-                    icon: "textformat.abc",
-                    example: "Mujhe lagta hai we should meet",
-                    description: "Romanizes non-English, keeps vernacular",
-                    isSelected: selectedScriptMode == "english_mixed",
-                    action: { selectedScriptMode = "english_mixed" }
+            HStack(spacing: 16) {
+                permissionCard(
+                    title: "Accessibility",
+                    granted: isAccessibilityTrusted(),
+                    actionTitle: "Open Settings",
+                    action: openAccessibilitySettings
                 )
+                permissionCard(
+                    title: "Microphone",
+                    granted: micGranted,
+                    actionTitle: "Allow Mic",
+                    action: requestMic
+                )
+            }
 
-                ScriptModeOnboardingCard(
-                    mode: "english_translated",
-                    title: "English Translated",
-                    badge: "",
-                    icon: "character.book.closed",
-                    example: "I think we should meet",
-                    description: "Translates everything to English",
-                    isSelected: selectedScriptMode == "english_translated",
-                    action: { selectedScriptMode = "english_translated" }
-                )
-
-                ScriptModeOnboardingCard(
-                    mode: "original_mixed",
-                    title: "Original Mixed",
-                    badge: "",
-                    icon: "globe",
-                    example: "मुझे लगता है we should meet",
-                    description: "Uses original script (Devanagari, etc.)",
-                    isSelected: selectedScriptMode == "original_mixed",
-                    action: { selectedScriptMode = "original_mixed" }
-                )
+            HStack {
+                Button("Open Input Monitoring") { openInputSettings() }
+                    .font(.caption)
             }
 
             Spacer()
-
             HStack {
-                Button("Back") {
-                    withAnimation { step = 2 }
-                }
-
-                Button("Next") {
-                    saveScriptMode()
-                    withAnimation { step = 4 }
-                }
-                .buttonStyle(.borderedProminent)
+                Button("Back") { withAnimation { step = paidManagedKey ? 2 : 3 } }
+                Button("Next") { withAnimation { step = 5 } }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!isAccessibilityTrusted())
             }
-            .controlSize(.large)
         }
         .padding()
-    }
-
-    // MARK: - Step 4: Grant Permissions (Microphone, Accessibility, Input)
-    var advancedPermissionsStep: some View {
-        ScrollView {
-            VStack(spacing: 25) {
-                Image(systemName: "checkmark.shield.fill")
-                    .font(.system(size: 60))
-                    .foregroundColor(.blue)
-
-                Text("Grant Permissions")
-                    .font(.title)
-                    .fontWeight(.bold)
-
-                Text("Riff needs access to See (Accessibility) and Type (Input).")
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal)
-
-                // 1. Accessibility & Input (Renumbered to 1 since Mic is gone)
-                // Note: Keeping the UI focused on interactions that require explicit system settings.
-                // Microphone will be asked on-demand during Test Drive.
-
-                // Accessibility & Input
-                VStack(alignment: .center, spacing: 10) {
-                    Text("1. Accessibility & Input Monitoring")
-                        .font(.headline)
-
-                    Text("**Note:** If Riff is already listed, you must reset it to ensure a clean link.")
-                        .font(.caption)
-                        .foregroundColor(.orange)
-                        .padding(.bottom, 5)
-                        .multilineTextAlignment(.center)
-
-                    Text("**Remove:** Select Riff and click the [ - ] (minus) button.")
-                    Text("**Re-add:** Click the [ + ] (plus) button.")
-                    Text("**Select:** Go to Applications > Double-click Riff.")
-                    Text("**Enable:** Ensure the toggle is ON.")
-                }
-                .font(.system(size: 13))
-                .padding()
-                .background(Color.gray.opacity(0.08))
-                .cornerRadius(8)
-                .frame(maxWidth: .infinity)
-                .multilineTextAlignment(.center)
-
-                if isAccessibilityTrusted() {
-                    Text("Accessibility Granted! 🎉")
-                        .foregroundColor(.green)
-                        .fontWeight(.bold)
-                } else {
-                    Text("Waiting for Accessibility...")
-                        .foregroundColor(.secondary)
-                        .font(.caption)
-                }
-
-                HStack {
-                    Button("Open Accessibility Settings") {
-                        openAccessibilitySettings()
-                    }
-                    .font(.caption)
-
-                    Button("Open Input Settings") {
-                        openInputSettings()
-                    }
-                    .font(.caption)
-                }
-
-                Spacer()
-
-                HStack {
-                    Button("Back") {
-                        withAnimation { step = 3 }
-                    }
-
-                    Button("Next") {
-                        withAnimation { step = 5 }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                }
-            }
-            .padding()
-        }
-        // Poll for permission changes
+        .onAppear { refreshMicStatus() }
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
-            let _ = isAccessibilityTrusted()
+            refreshMicStatus()
         }
     }
 
-    // MARK: - Step 5: Test Drive
-    var testStep: some View {
-        VStack(spacing: 20) {
+    func permissionCard(title: String, granted: Bool, actionTitle: String, action: @escaping () -> Void) -> some View {
+        VStack(spacing: 10) {
+            Image(systemName: granted ? "checkmark.circle.fill" : "circle")
+                .foregroundColor(granted ? .green : .secondary)
+                .font(.title)
+            Text(title).fontWeight(.semibold)
+            Text(granted ? "Granted" : "Required")
+                .font(.caption)
+                .foregroundColor(granted ? .green : .secondary)
+            Button(actionTitle, action: action)
+                .font(.caption)
+        }
+        .padding()
+        .frame(maxWidth: .infinity)
+        .background(Color.gray.opacity(0.08))
+        .cornerRadius(10)
+    }
+
+    var testDriveStep: some View {
+        VStack(spacing: 16) {
             Text("Test Drive")
                 .font(.title)
                 .fontWeight(.bold)
-
-            Text("1. Press Left Ctrl. Grant microphone access.\n2. Hold Left Ctrl to speak.")
+            Text("Hold Left Control (ctrl) and speak. Riff will transcribe into the box below once a riff lands in History.")
                 .multilineTextAlignment(.center)
                 .foregroundColor(.secondary)
 
-            TextEditor(text: $testInput)
-                .font(.system(size: 14))
-                .foregroundColor(.primary)
-                .padding(5)
-                .background(Color.white)
-                .cornerRadius(8)
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.3), lineWidth: 1))
-                .frame(height: 150)
+            if testDriveSucceeded {
+                Text("First riff received. You're ready.")
+                    .foregroundColor(.green)
+                    .fontWeight(.semibold)
+            } else {
+                Text("Waiting for a riff…")
+                    .foregroundColor(.secondary)
+                    .font(.caption)
+            }
 
             Spacer()
-
             HStack {
-                Button("Back") {
-                    withAnimation { step = 4 }
-                }
-
+                Button("Back") { withAnimation { step = 4 } }
                 Button("Start Riffing") {
                     completeOnboarding()
                 }
                 .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+                .disabled(!testDriveSucceeded && !isAccessibilityTrusted())
             }
+            Text("You can continue if Accessibility is granted even without a test riff.")
+                .font(.caption2)
+                .foregroundColor(.secondary)
         }
         .padding()
+        .onAppear {
+            testDriveBaseline = settings.history.count
+            requestMic()
+        }
+        .onReceive(Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()) { _ in
+            if settings.history.count > testDriveBaseline {
+                testDriveSucceeded = true
+            }
+        }
     }
 
     func saveKey() {
         var newConfig = settings.config
         newConfig.api.api_key = apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Ensure flag keeps false
         newConfig.onboarding_completed = false
-        settings.config = newConfig
-        settings.saveConfig()
-    }
-
-    func saveScriptMode() {
-        var newConfig = settings.config
-        newConfig.script_mode.active_mode = selectedScriptMode
         settings.config = newConfig
         settings.saveConfig()
     }
@@ -312,109 +247,45 @@ struct OnboardingView: View {
         settings.config = newConfig
         settings.saveConfig()
     }
-    
-    func openMicrophoneSettings() {
-        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!
-        NSWorkspace.shared.open(url)
+
+    func advanceIfPossible() {
+        if !authManager.isAuthenticated {
+            step = settings.config.onboarding_completed == true ? 2 : 1
+            return
+        }
+        if !paidManagedKey && settings.config.api.api_key.isEmpty {
+            step = 3
+            return
+        }
+        if !(settings.config.onboarding_completed ?? false) {
+            step = 4
+        }
     }
-    
+
     func openAccessibilitySettings() {
-        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
-        NSWorkspace.shared.open(url)
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
     }
-    
+
     func openInputSettings() {
-        // macOS Input Monitoring URL
-        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")!
-        NSWorkspace.shared.open(url)
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")!)
     }
-    
+
     func isAccessibilityTrusted() -> Bool {
-        return AXIsProcessTrusted()
+        AXIsProcessTrusted()
     }
-    
-    func quitAndRestart() {
-         NSApplication.shared.terminate(nil)
-    }
-}
 
-struct ScriptModeOnboardingCard: View {
-    let mode: String
-    let title: String
-    let badge: String
-    let icon: String
-    let example: String
-    let description: String
-    let isSelected: Bool
-    let action: () -> Void
-
-    var color: Color {
-        switch mode {
-        case "english_mixed": return .green
-        case "english_translated": return .blue
-        case "original_mixed": return .purple
-        default: return .gray
+    func refreshMicStatus() {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            micGranted = true
+        default:
+            break
         }
     }
 
-    var body: some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 10) {
-                Image(systemName: icon)
-                    .font(.system(size: 24))
-                    .foregroundStyle(isSelected ? .white : color)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                if !badge.isEmpty {
-                    Text(badge)
-                        .font(.caption2)
-                        .fontWeight(.semibold)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(isSelected ? .white.opacity(0.3) : color.opacity(0.15))
-                        .foregroundStyle(isSelected ? .white : color)
-                        .cornerRadius(4)
-                }
-
-                Text(title)
-                    .font(.headline)
-                    .foregroundStyle(isSelected ? .white : .primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                Text(description)
-                    .font(.caption)
-                    .foregroundStyle(isSelected ? .white.opacity(0.9) : .secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                Divider()
-                    .background(isSelected ? .white.opacity(0.3) : .gray.opacity(0.2))
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Example:")
-                        .font(.caption2)
-                        .foregroundStyle(isSelected ? .white.opacity(0.7) : .secondary)
-
-                    Text(example)
-                        .font(.caption)
-                        .italic()
-                        .foregroundStyle(isSelected ? .white : .primary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .lineLimit(2)
-                }
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(isSelected ? color : Color.gray.opacity(0.08))
-                    .shadow(color: .black.opacity(isSelected ? 0.2 : 0.05), radius: isSelected ? 6 : 2, x: 0, y: isSelected ? 3 : 1)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(isSelected ? color.opacity(0.0) : Color.gray.opacity(0.15), lineWidth: 1)
-            )
+    func requestMic() {
+        AVCaptureDevice.requestAccess(for: .audio) { granted in
+            DispatchQueue.main.async { micGranted = granted }
         }
-        .buttonStyle(.plain)
     }
 }

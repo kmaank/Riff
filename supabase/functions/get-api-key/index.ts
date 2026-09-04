@@ -3,7 +3,7 @@
 // Rate-limited to prevent abuse
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
-import { getSupabaseClient, getUserId, corsHeaders } from '../_shared/clients.ts';
+import { getSupabaseServiceClient, getUserId, corsHeaders } from '../_shared/clients.ts';
 
 serve(async (req) => {
   // Handle CORS
@@ -21,7 +21,7 @@ serve(async (req) => {
       );
     }
 
-    const supabase = getSupabaseClient(req);
+    const supabase = getSupabaseServiceClient();
 
     // Check subscription tier
     const { data: subscription, error: subError } = await supabase

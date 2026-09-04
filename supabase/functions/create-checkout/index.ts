@@ -2,7 +2,7 @@
 // Creates Stripe Checkout session for tier upgrades
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
-import { getSupabaseClient, getStripeClient, getUserId, corsHeaders } from '../_shared/clients.ts';
+import { getSupabaseClient, getSupabaseServiceClient, getStripeClient, getUserId, corsHeaders } from '../_shared/clients.ts';
 
 interface CheckoutRequest {
   tier: 'starter' | 'pro' | 'lifetime';
@@ -61,7 +61,7 @@ serve(async (req) => {
       customerId = customer.id;
 
       // Update subscription with customer ID
-      await supabase
+      await getSupabaseServiceClient()
         .from('subscriptions')
         .update({ stripe_customer_id: customerId })
         .eq('user_id', userId);
@@ -69,9 +69,9 @@ serve(async (req) => {
 
     // Get price IDs from environment
     const priceIds = {
-      starter: Deno.env.get('STRIPE_STARTER_PRICE_ID'),
-      pro: Deno.env.get('STRIPE_PRO_PRICE_ID'),
-      lifetime: Deno.env.get('STRIPE_LIFETIME_PRICE_ID'),
+      starter: Deno.env.get('STRIPE_STARTER_PRICE_ID') || Deno.env.get('STRIPE_PRICE_ID_STARTER'),
+      pro: Deno.env.get('STRIPE_PRO_PRICE_ID') || Deno.env.get('STRIPE_PRICE_ID_PRO'),
+      lifetime: Deno.env.get('STRIPE_LIFETIME_PRICE_ID') || Deno.env.get('STRIPE_PRICE_ID_LIFETIME'),
     };
 
     const priceId = priceIds[body.tier];

@@ -2,6 +2,7 @@
 import json
 import os
 import platform
+import uuid
 from typing import Any
 
 class ConfigManager:
@@ -39,6 +40,7 @@ class ConfigManager:
             "week_start_date": "",  # ISO date for tracking weekly reset
             "style_counts": {}  # Track usage per style
         },
+        "onboarding_completed": False,
         "auth": {
             "supabase_url": "https://yrsviodciuepunofxoja.supabase.co",
             "supabase_anon_key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inlyc3Zpb2RjaXVlcHVub2Z4b2phIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Mzk1OTY1ODksImV4cCI6MjA1NTE3MjU4OX0.7f_q_xbFZNOB3Gqk-PL78gQ2jEZ_CivfCk1n_JJsMbE"
@@ -99,6 +101,11 @@ class ConfigManager:
             print("[Config] Migrating placeholder Supabase credentials to real project values")
             self.set("auth.supabase_url", self.DEFAULT_CONFIG["auth"]["supabase_url"])
             self.set("auth.supabase_anon_key", self.DEFAULT_CONFIG["auth"]["supabase_anon_key"])
+
+        device = self.config.setdefault("device", {})
+        if not device.get("device_id"):
+            device["device_id"] = str(uuid.uuid4())
+            self.save()
             
         return self.config
 

@@ -21,7 +21,10 @@ export function getSupabaseClient(req: Request) {
 // Get Supabase service role client (bypasses RLS)
 export function getSupabaseServiceClient() {
   const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
-  const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+  const supabaseServiceKey =
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ??
+    Deno.env.get('SUPABASE_SERVICE_KEY') ??
+    '';
 
   return createClient(supabaseUrl, supabaseServiceKey, {
     auth: { persistSession: false },
@@ -68,8 +71,17 @@ export function getManagedGroqKey(tier: string): string | null {
 
   // For paid tiers, use managed keys
   // In production, you might have different keys per tier for rate limiting
-  const groqApiKey = Deno.env.get('GROQ_API_KEY');
-  return groqApiKey || null;
+  const perTier: Record<string, string | undefined> = {
+    starter: Deno.env.get('GROQ_API_KEY_STARTER'),
+    pro: Deno.env.get('GROQ_API_KEY_PRO'),
+    lifetime: Deno.env.get('GROQ_API_KEY_LIFETIME'),
+  };
+  return (
+    perTier[tier] ||
+    Deno.env.get('GROQ_API_KEY') ||
+    Deno.env.get('MANAGED_GROQ_API_KEY') ||
+    null
+  );
 }
 
 // CORS headers for all Edge Functions

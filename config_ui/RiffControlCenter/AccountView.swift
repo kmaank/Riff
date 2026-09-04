@@ -32,7 +32,7 @@ struct AccountView: View {
                     .padding(30)
                 }
             } else {
-                LoginView()
+                LoginView(compact: true)
             }
         }
         .sheet(isPresented: $showSubscriptionView) {
@@ -69,7 +69,7 @@ struct AccountView: View {
                         .font(.body)
                         .fontWeight(.medium)
 
-                    Text("Member since \(memberSinceDate())")
+                    Text("Member since \(authManager.memberSince.isEmpty ? memberSinceDate() : authManager.memberSince)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

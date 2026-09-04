@@ -1,7 +1,7 @@
 # Supabase project configuration
 # This file is used by the Supabase CLI
 
-project_id = "your-project-id"
+project_id = "yrsviodciuepunofxoja"
 
 [api]
 enabled = true
@@ -22,15 +22,15 @@ api_url = "http://localhost"
 
 [auth]
 enabled = true
-site_url = "http://localhost:3000"
-additional_redirect_urls = ["riff://oauth/callback"]
+site_url = "riff://auth/callback"
+additional_redirect_urls = ["riff://auth/callback", "riff://oauth/callback"]
 jwt_expiry = 3600
 enable_signup = true
 
 [auth.email]
 enable_signup = true
 double_confirm_changes = false
-enable_confirmations = false
+enable_confirmations = true
 
 # Edge Functions
 [functions]

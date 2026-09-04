@@ -2,7 +2,7 @@
 // Handles Stripe webhook events (payment success, subscription changes)
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
-import { getSupabaseClient, getStripeClient, corsHeaders } from '../_shared/clients.ts';
+import { getSupabaseServiceClient, getStripeClient, getManagedGroqKey } from '../_shared/clients.ts';
 
 serve(async (req) => {
   try {
@@ -29,10 +29,7 @@ serve(async (req) => {
       return new Response('Invalid signature', { status: 400 });
     }
 
-    // Get service role Supabase client (bypasses RLS)
-    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    const supabase = getSupabaseServiceClient();
 
     // Handle different event types
     switch (event.type) {
@@ -194,7 +191,11 @@ async function provisionManagedKey(supabase: any, userId: string, tier: string) 
   } else {
     // Create new key
     // TODO: In production, fetch a real Groq key from pool and encrypt it
-    const managedKey = Deno.env.get('MANAGED_GROQ_API_KEY') ?? 'gsk_managed_key_placeholder';
+    const managedKey = getManagedGroqKey(tier);
+    if (!managedKey) {
+      console.error('No managed Groq key configured for tier', tier);
+      return;
+    }
     
     await supabase
       .from('api_keys')
@@ -207,5 +208,3 @@ async function provisionManagedKey(supabase: any, userId: string, tier: string) 
   }
 }
 
-// Import needed for Supabase client
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';

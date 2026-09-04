@@ -49,6 +49,21 @@ export function getTierFeatures(tier: string): TierLimits {
   return TIER_LIMITS[tier] || TIER_LIMITS.free;
 }
 
+/** Alias used by proxy Edge Functions */
+export function getTierConfig(tier: string): TierLimits {
+  return getTierFeatures(tier);
+}
+
+const FREE_STYLES = new Set(["clean", "casual"]);
+
+export function isStyleAllowed(tier: string, style: string): boolean {
+  const features = getTierFeatures(tier);
+  if (features.all_styles) {
+    return true;
+  }
+  return FREE_STYLES.has(style);
+}
+
 // Check if user has exceeded quota for their tier
 export function checkQuota(
   tier: string,

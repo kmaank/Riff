@@ -22,6 +22,7 @@ swiftc "$SRC_DIR"/*.swift \
     -o "$OUTPUT_APP/Contents/MacOS/$APP_NAME" \
     -target arm64-apple-macosx12.0 \
     -sdk $(xcrun --show-sdk-path) \
+    -framework AVFoundation \
     -O
 
 # Create Info.plist
@@ -46,6 +47,8 @@ cat > "$OUTPUT_APP/Contents/Info.plist" <<EOF
     <string>AppIcon</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Riff needs microphone access to transcribe your voice.</string>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>

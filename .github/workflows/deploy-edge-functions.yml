@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - claude/review-riff-app-ffwNp
+      - claude/fix-login-issues-yb6Vr
     paths:
       - 'supabase/functions/**'
   workflow_dispatch:  # Allow manual triggering

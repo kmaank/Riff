@@ -52,7 +52,7 @@ exe = EXE(
     upx=True,
     console=False,
     disable_windowed_traceback=False,
-    argv_emulation=False,
+    argv_emulation=True,
     target_arch='arm64',
     codesign_identity=None,
     entitlements_file=None,
@@ -76,5 +76,9 @@ app = BUNDLE(
         'NSAppleEventsUsageDescription': 'Riff needs to control other applications to paste text.',
         'NSAccessibilityUsageDescription': 'Riff needs accessibility to listen for global hotkeys.',
         'LSUIElement': True,
+        'CFBundleURLTypes': [{
+            'CFBundleURLName': 'com.riff.app.auth',
+            'CFBundleURLSchemes': ['riff'],
+        }],
     },
 )

@@ -85,8 +85,10 @@ class HistoryManager:
                 json.dump(history, f, indent=2)
                 
             logging.info(f"History entry added: {style}, script_mode: {script_mode}")
+            return entry
         except Exception as e:
             logging.error(f"Failed to save history: {e}")
+            return None
 
 
 class ProcessingThread(threading.Thread):
@@ -243,7 +245,14 @@ class ProcessingThread(threading.Thread):
 
         # 4. Save History
         script_mode = self.transcriber.script_mode if self.transcriber else "unknown"
-        self.history_manager.add_entry(raw_text, refined_text, style, script_mode)
+        entry = self.history_manager.add_entry(raw_text, refined_text, style, script_mode)
+        if self.auth_manager and entry:
+            try:
+                self.auth_manager.upload_history_entry(
+                    entry["timestamp"], raw_text, refined_text, style, script_mode
+                )
+            except Exception as e:
+                logging.warning(f"[Auth] History upload error: {e}")
 
         # 5. Update Metrics
         word_count = len(refined_text.split())
@@ -258,6 +267,12 @@ class ProcessingThread(threading.Thread):
                     duration_sec,
                     style,
                     script_mode
+                )
+                self.auth_manager.sync_user_settings(
+                    self.config_manager.get("hotkey.combination", "ctrl_l"),
+                    style,
+                    script_mode,
+                    bool(self.config_manager.get("onboarding_completed")),
                 )
                 logging.info("[Auth] Usage logged to backend")
             except Exception as e:
@@ -386,6 +401,70 @@ class RiffApp:
 
         logging.info("Initialization Complete")
 
+    def handle_auth_url(self, url: str):
+        if not self.auth_manager:
+            return
+        result = self.auth_manager.handle_auth_callback_url(url)
+        if result.get("success"):
+            self.show_notification("Riff", "Signed in successfully.")
+            self.open_settings()
+        elif result.get("error"):
+            self.show_notification("Riff sign-in", str(result["error"]))
+
+    def _merge_cloud_history(self, remote):
+        try:
+            hm = HistoryManager()
+            local = []
+            if os.path.exists(hm.history_file):
+                with open(hm.history_file, "r") as f:
+                    local = json.load(f)
+            by_ts = {e.get("timestamp"): e for e in local if isinstance(e, dict)}
+            for item in remote:
+                ts = item.get("timestamp")
+                if ts and ts not in by_ts:
+                    by_ts[ts] = {
+                        "timestamp": ts,
+                        "original": item.get("original", ""),
+                        "refined": item.get("refined", ""),
+                        "style": item.get("style", ""),
+                        "script_mode": item.get("script_mode", ""),
+                    }
+            merged = sorted(by_ts.values(), key=lambda e: e.get("timestamp", ""), reverse=True)[:50]
+            with open(hm.history_file, "w") as f:
+                json.dump(merged, f, indent=2)
+            logging.info("[Auth] Merged cloud history (%s remote)", len(remote))
+        except Exception as e:
+            logging.warning("[Auth] History merge failed: %s", e)
+
+    def install_auth_url_handler(self):
+        try:
+            from AppKit import NSAppleEventManager, NSApplication
+            from Foundation import NSObject
+
+            NSApplication.sharedApplication()
+            owner = self
+
+            class URLHandler(NSObject):
+                def handleGetURLEvent_withReplyEvent_(self, event, replyEvent):
+                    try:
+                        key_direct_object = 0x2D2D2D2D
+                        desc = event.descriptorForKeyword_(key_direct_object)
+                        url = desc.stringValue() if desc else None
+                        if url:
+                            owner.handle_auth_url(url)
+                    except Exception as exc:
+                        logging.error("[Auth] URL event failed: %s", exc)
+
+            handler = URLHandler.alloc().init()
+            gurl = 0x4755524C
+            NSAppleEventManager.sharedAppleEventManager().setEventHandler_andSelector_forEventClass_andEventID_(
+                handler, b"handleGetURLEvent:withReplyEvent:", gurl, gurl
+            )
+            self._url_handler = handler
+            logging.info("[Auth] Registered riff:// URL handler")
+        except Exception as e:
+            logging.warning("[Auth] Could not install URL handler: %s", e)
+
     @property
     def is_processing(self):
         with self._state_lock:
@@ -413,6 +492,23 @@ class RiffApp:
     def start(self):
         print("Riff Starting...")
         logging.info("App start() called")
+        self.install_auth_url_handler()
+        if self.auth_manager and self.auth_manager.is_authenticated:
+            try:
+                self.auth_manager.register_this_device()
+                remote = self.auth_manager.download_history()
+                if remote:
+                    self._merge_cloud_history(remote)
+                pulled = self.auth_manager.pull_user_settings()
+                if pulled:
+                    if pulled.get("hotkey"):
+                        self.config.set("hotkey.combination", pulled["hotkey"])
+                    if pulled.get("style"):
+                        self.config.set("style.active_style", pulled["style"])
+                    if pulled.get("script_mode"):
+                        self.config.set("script_mode.active_mode", pulled["script_mode"])
+            except Exception as e:
+                logging.warning("[Auth] Startup cloud sync failed: %s", e)
         
         # Check Accessibility Permission
         perm_status = self.permission_manager.check_accessibility()
@@ -1047,20 +1143,17 @@ def launch_settings_app(config, app_instance=None):
 
 
 def main():
-    # 1. Load Config
     config = ConfigManager()
-
-    # 2. Check for First Run / Missing Key
     api_key = config.get("api.api_key")
-    if not api_key:
-        print("First run detected. Launching Riff Control Center for Onboarding...")
+    onboarded = config.get("onboarding_completed")
+    if not onboarded or not api_key:
+        print("Setup required. Launching Riff Control Center...")
         launch_settings_app(config)
-        # DO NOT block here — the app will start immediately with the tray icon.
-        # When the user finishes onboarding and saves the API key, the config
-        # monitor thread detects the change and reinitializes components.
 
-    # 3. Start App (always — handles missing API key gracefully)
     app = RiffApp()
+    for arg in sys.argv[1:]:
+        if isinstance(arg, str) and arg.startswith("riff://"):
+            app.handle_auth_url(arg)
     app.start()
 
 

@@ -62,7 +62,7 @@ class SettingsManager: ObservableObject {
         self.config = Config(
             audio: AudioConfig(sample_rate: 16000, silence_threshold_ms: 600),
             api: ApiConfig(api_key: "", llm_model: "llama-3.3-70b-versatile"),
-            hotkey: HotkeyConfig(combination: "f8"),
+            hotkey: HotkeyConfig(combination: "ctrl_l"),
             style: StyleConfig(active_style: "casual"),
             script_mode: ScriptModeConfig(active_mode: "english_mixed"),
             onboarding_completed: false
@@ -94,10 +94,21 @@ class SettingsManager: ObservableObject {
     
     func saveConfig() {
         do {
+            var existing: [String: Any] = [:]
+            if let data = try? Data(contentsOf: configPath),
+               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                existing = obj
+            }
             let encoder = JSONEncoder()
             encoder.outputFormatting = .prettyPrinted
-            let data = try encoder.encode(config)
-            try data.write(to: configPath)
+            let encoded = try encoder.encode(config)
+            if let newObj = try JSONSerialization.jsonObject(with: encoded) as? [String: Any] {
+                for (key, value) in newObj {
+                    existing[key] = value
+                }
+            }
+            let out = try JSONSerialization.data(withJSONObject: existing, options: [.prettyPrinted, .sortedKeys])
+            try out.write(to: configPath, options: .atomic)
         } catch {
             print("Config save error: \(error)")
         }

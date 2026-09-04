@@ -6,9 +6,12 @@ struct ContentView: View {
     @State private var selectedTab = "script-style"
 
     var body: some View {
-        // Onboarding first (Get Started → Groq API → Permissions → Try it out)
-        // No login required at startup. Login/Signup lives in the Account tab.
-        if (settings.config.onboarding_completed ?? false) == false || settings.config.api.api_key.isEmpty {
+        let onboardingDone = settings.config.onboarding_completed ?? false
+        let hasKey = !settings.config.api.api_key.isEmpty
+        let paid = authManager.managedKeyAvailable || (authManager.subscriptionTier != "free" && authManager.subscriptionTier != "")
+        let needsSetup = !onboardingDone || !authManager.isAuthenticated || (!hasKey && !paid)
+
+        if needsSetup {
             OnboardingView()
         } else {
             HStack(spacing: 0) {

@@ -25,6 +25,9 @@ class SwiftAuthManager: ObservableObject {
     @Published var quota: QuotaInfo?
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
+    @Published var memberSince: String = ""
+    @Published var googleOAuthEnabled: Bool = false
+    @Published var managedKeyAvailable: Bool = false
 
     let supabaseUrl: String
     let supabaseAnonKey: String
@@ -46,6 +49,7 @@ class SwiftAuthManager: ObservableObject {
         // Load config to get Supabase credentials
         var url = "https://yrsviodciuepunofxoja.supabase.co"
         var key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inlyc3Zpb2RjaXVlcHVub2Z4b2phIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Mzk1OTY1ODksImV4cCI6MjA1NTE3MjU4OX0.7f_q_xbFZNOB3Gqk-PL78gQ2jEZ_CivfCk1n_JJsMbE"
+        var googleEnabled = false
 
         AuthLogger.log("Loading config from: \(configPath.path)")
 
@@ -54,6 +58,7 @@ class SwiftAuthManager: ObservableObject {
            let auth = config["auth"]?.value as? [String: Any] {
             url = auth["supabase_url"] as? String ?? url
             key = auth["supabase_anon_key"] as? String ?? key
+            googleEnabled = auth["google_oauth_enabled"] as? Bool ?? false
             AuthLogger.log("Config loaded successfully. Supabase URL: \(url)")
         } else {
             AuthLogger.log("WARNING: Could not load config.json — using default placeholder credentials")
@@ -62,6 +67,7 @@ class SwiftAuthManager: ObservableObject {
         self.supabaseUrl = url
         self.supabaseAnonKey = key
         self.authStatePath = riffDir.appendingPathComponent("auth_state.json")
+        self.googleOAuthEnabled = googleEnabled
 
         // Validate credentials
         if supabaseUrl.contains("your-project") || supabaseAnonKey.contains("your-anon-key") {
@@ -74,14 +80,11 @@ class SwiftAuthManager: ObservableObject {
 
         // Load cached auth state
         loadCachedState()
-
-        // Start polling auth_state.json for changes from Python
         startAuthStateMonitor()
-
         AuthLogger.log("SwiftAuthManager initialized. isAuthenticated=\(isAuthenticated), email=\(userEmail)")
-
-        // Fire a background connectivity check on startup — results go to debug_auth.log only
         runStartupConnectivityCheck()
+        Task { await self.refreshSessionIfNeeded() }
+        fetchProfile()
     }
 
     /// Quick background check on startup to verify Supabase is reachable.
@@ -220,6 +223,8 @@ class SwiftAuthManager: ObservableObject {
 
                 writeAuthState(authenticated: true, email: result.user.email, userId: result.user.id)
                 storeTokens(accessToken: result.accessToken, refreshToken: result.refreshToken)
+                logLoginEvent(method: "email_signin", success: true)
+                fetchProfile()
             } else {
                 let responseBody = String(data: data, encoding: .utf8) ?? "<non-utf8>"
                 AuthLogger.log("Login failed HTTP \(httpResponse.statusCode): \(responseBody)")
@@ -283,7 +288,13 @@ class SwiftAuthManager: ObservableObject {
             self.errorMessage = nil
         }
 
-        let endpoint = "\(supabaseUrl)/auth/v1/signup"
+        let endpoint: String
+        if var components = URLComponents(string: "\(supabaseUrl)/auth/v1/signup") {
+            components.queryItems = [URLQueryItem(name: "redirect_to", value: "riff://auth/callback")]
+            endpoint = components.url?.absoluteString ?? "\(supabaseUrl)/auth/v1/signup"
+        } else {
+            endpoint = "\(supabaseUrl)/auth/v1/signup"
+        }
         AuthLogger.log("POST \(endpoint)")
 
         guard let url = URL(string: endpoint) else {
@@ -302,21 +313,11 @@ class SwiftAuthManager: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 30
 
-        // emailRedirectTo: Where user goes after clicking "Confirm" in email (desktop app)
-        // Must be in Supabase Redirect URLs. riff://auth/callback opens our app with tokens.
-        // Send both camelCase (JS API) and snake_case (GoTrue REST) for compatibility
-        let body: [String: Any] = [
-            "email": email,
-            "password": password,
-            "options": [
-                "emailRedirectTo": "riff://auth/callback",
-                "email_redirect_to": "riff://auth/callback"
-            ]
-        ]
+        let body: [String: Any] = ["email": email, "password": password]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         AuthLogger.log("Request headers: apikey=\(supabaseAnonKey.prefix(20))..., Authorization=Bearer ..., Content-Type=application/json")
-        AuthLogger.log("Signup with emailRedirectTo: riff://auth/callback")
+        AuthLogger.log("Signup redirect_to=riff://auth/callback")
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -347,6 +348,8 @@ class SwiftAuthManager: ObservableObject {
 
                     writeAuthState(authenticated: true, email: result.user.email, userId: result.user.id)
                     storeTokens(accessToken: result.accessToken, refreshToken: result.refreshToken)
+                    logLoginEvent(method: "email_signup", success: true)
+                    fetchProfile()
                 } else {
                     let responseBody = String(data: data, encoding: .utf8) ?? "<non-utf8>"
                     AuthLogger.log("Signup OK but email confirmation required. Response: \(responseBody)")
@@ -464,7 +467,8 @@ class SwiftAuthManager: ObservableObject {
             return
         }
 
-        let authUrl = "\(supabaseUrl)/auth/v1/authorize?provider=\(provider)&redirect_to=riff://oauth/callback"
+        let encodedRedirect = "riff://oauth/callback".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "riff://oauth/callback"
+        let authUrl = "\(supabaseUrl)/auth/v1/authorize?provider=\(provider)&redirect_to=\(encodedRedirect)"
         AuthLogger.log("Opening OAuth URL: \(authUrl)")
 
         if let url = URL(string: authUrl) {
@@ -474,59 +478,62 @@ class SwiftAuthManager: ObservableObject {
         }
     }
 
-    /// Handles both OAuth (riff://oauth/callback) and email confirmation (riff://auth/callback) redirects.
-    /// Both pass access_token and refresh_token in the URL fragment.
+    /// Handles OAuth (riff://oauth/callback) and email confirmation (riff://auth/callback).
     func handleAuthCallback(url: URL) {
         AuthLogger.log("handleAuthCallback called with URL: \(url.absoluteString)")
 
-        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              let fragment = components.fragment else {
-            AuthLogger.log("ERROR: OAuth callback URL has no fragment")
-            return
-        }
-
-        let params = fragment.components(separatedBy: "&")
-            .reduce(into: [String: String]()) { result, param in
-                let parts = param.components(separatedBy: "=")
-                if parts.count == 2 {
-                    // Decode URL-encoded values (e.g. error_description=Email+link+is+invalid)
-                    let value = parts[1].replacingOccurrences(of: "+", with: " ")
-                        .removingPercentEncoding ?? parts[1]
-                    result[parts[0]] = value
+        var params: [String: String] = [:]
+        if let components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            if let items = components.queryItems {
+                for item in items {
+                    params[item.name] = item.value ?? ""
                 }
             }
+            if let fragment = components.fragment {
+                for pair in fragment.components(separatedBy: "&") {
+                    let parts = pair.components(separatedBy: "=")
+                    if parts.count >= 2 {
+                        let value = parts[1].replacingOccurrences(of: "+", with: " ")
+                            .removingPercentEncoding ?? parts[1]
+                        params[parts[0]] = value
+                    }
+                }
+            }
+        }
 
         AuthLogger.log("Auth callback params: \(params.keys.joined(separator: ", "))")
 
-        // Check for error (e.g. otp_expired, access_denied)
         if let errorDesc = params["error_description"] ?? params["error"] {
             AuthLogger.log("Auth callback error: \(errorDesc)")
             DispatchQueue.main.async {
                 self.errorMessage = errorDesc
             }
+            logLoginEvent(method: url.host == "oauth" ? "oauth_google" : "email_confirm", success: false, error: errorDesc)
             return
         }
 
         if let accessToken = params["access_token"],
            let refreshToken = params["refresh_token"] {
-
-            AuthLogger.log("OAuth tokens received, storing...")
+            AuthLogger.log("Auth tokens received, storing...")
             storeTokens(accessToken: accessToken, refreshToken: refreshToken)
 
             if let userInfo = decodeJWT(token: accessToken) {
                 let email = userInfo["email"] as? String ?? ""
                 let userId = userInfo["sub"] as? String ?? ""
-                AuthLogger.log("OAuth JWT decoded: email=\(email), userId=\(userId)")
+                AuthLogger.log("JWT decoded: email=\(email), userId=\(userId)")
 
                 DispatchQueue.main.async {
                     self.isAuthenticated = true
                     self.userEmail = email
                     self.userId = userId
+                    self.errorMessage = nil
                 }
 
                 writeAuthState(authenticated: true, email: email, userId: userId)
+                logLoginEvent(method: url.host == "oauth" ? "oauth_google" : "email_confirm", success: true)
+                fetchProfile()
             } else {
-                AuthLogger.log("ERROR: Failed to decode OAuth JWT")
+                AuthLogger.log("ERROR: Failed to decode JWT")
             }
         } else {
             AuthLogger.log("ERROR: Auth callback missing access_token or refresh_token")
@@ -553,6 +560,7 @@ class SwiftAuthManager: ObservableObject {
 
         // Write auth state for Python
         writeAuthState(authenticated: false, email: "", userId: "")
+        logLoginEvent(method: "sign_out", success: true)
         AuthLogger.log("Sign out complete — tokens cleared, auth state written")
     }
 
@@ -604,6 +612,7 @@ class SwiftAuthManager: ObservableObject {
             await MainActor.run {
                 self.subscriptionTier = result.tier
                 self.subscriptionStatus = result.status
+                self.managedKeyAvailable = result.managedKeyAvailable ?? false
                 self.quota = QuotaInfo(
                     riffsLimit: result.quota.riffsLimit,
                     riffsUsed: result.quota.riffsUsed,
@@ -615,6 +624,95 @@ class SwiftAuthManager: ObservableObject {
             AuthLogger.log("ERROR: Subscription validation failed: \(error.localizedDescription)")
             throw error
         }
+    }
+
+    func refreshSessionIfNeeded() async {
+        guard let token = UserDefaults.standard.string(forKey: "supabase_refresh_token")
+            ?? getFromKeychain(service: "riff", account: "supabase_refresh_token"),
+              !token.isEmpty else { return }
+
+        guard let url = URL(string: "\(supabaseUrl)/auth/v1/token?grant_type=refresh_token") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(supabaseAnonKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["refresh_token": token])
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                AuthLogger.log("Token refresh failed")
+                logLoginEvent(method: "token_refresh", success: false)
+                return
+            }
+            let result = try JSONDecoder().decode(AuthResponse.self, from: data)
+            storeTokens(accessToken: result.accessToken, refreshToken: result.refreshToken)
+            await MainActor.run {
+                self.isAuthenticated = true
+                self.userEmail = result.user.email
+                self.userId = result.user.id
+            }
+            writeAuthState(authenticated: true, email: result.user.email, userId: result.user.id)
+            logLoginEvent(method: "token_refresh", success: true)
+            AuthLogger.log("Token refresh succeeded")
+        } catch {
+            AuthLogger.log("Token refresh error: \(error.localizedDescription)")
+        }
+    }
+
+    func fetchProfile() {
+        guard let token = UserDefaults.standard.string(forKey: "supabase_access_token")
+            ?? getFromKeychain(service: "riff", account: "supabase_access_token"),
+              !token.isEmpty else { return }
+        guard !userId.isEmpty else { return }
+        guard let url = URL(string: "\(supabaseUrl)/rest/v1/profiles?select=email,created_at&id=eq.\(userId)") else { return }
+
+        var request = URLRequest(url: url)
+        request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        URLSession.shared.dataTask(with: request) { data, _, error in
+            guard let data = data, error == nil,
+                  let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+                  let row = rows.first else { return }
+            let created = row["created_at"] as? String ?? ""
+            let email = row["email"] as? String ?? self.userEmail
+            DispatchQueue.main.async {
+                if !email.isEmpty { self.userEmail = email }
+                if let iso = ISO8601DateFormatter().date(from: created.replacingOccurrences(of: "\\.\\d+", with: "", options: .regularExpression)) {
+                    let fmt = DateFormatter()
+                    fmt.dateStyle = .medium
+                    self.memberSince = fmt.string(from: iso)
+                } else if created.count >= 10 {
+                    self.memberSince = String(created.prefix(10))
+                }
+            }
+        }.resume()
+    }
+
+    func logLoginEvent(method: String, success: Bool, error: String? = nil) {
+        guard let token = UserDefaults.standard.string(forKey: "supabase_access_token")
+            ?? getFromKeychain(service: "riff", account: "supabase_access_token"),
+              !token.isEmpty else { return }
+        guard let url = URL(string: "\(supabaseUrl)/rest/v1/login_events") else { return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("return=minimal", forHTTPHeaderField: "Prefer")
+
+        var body: [String: Any] = [
+            "user_id": userId,
+            "email": userEmail,
+            "method": method,
+            "success": success
+        ]
+        if let error = error { body["error"] = error }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        URLSession.shared.dataTask(with: request).resume()
     }
 
     // MARK: - IPC with Python
@@ -800,6 +898,12 @@ struct SubscriptionResponse: Codable {
     let tier: String
     let status: String
     let quota: Quota
+    let managedKeyAvailable: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case valid, tier, status, quota
+        case managedKeyAvailable = "managed_key_available"
+    }
 
     struct Quota: Codable {
         let riffsLimit: Int?

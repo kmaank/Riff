@@ -5,6 +5,8 @@ Handles Supabase authentication, subscription validation, quota enforcement, and
 
 import json
 import logging
+import platform
+from urllib.parse import parse_qs, quote, urlparse
 import httpx
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -14,6 +16,9 @@ import keyring
 from utils.subscription_config import get_tier_features
 
 logger = logging.getLogger(__name__)
+
+AUTH_EMAIL_REDIRECT = "riff://auth/callback"
+OAUTH_REDIRECT = "riff://oauth/callback"
 
 class AuthManager:
     """Manages authentication, subscription, and quota for Riff"""
@@ -180,25 +185,18 @@ class AuthManager:
             logger.error("[Auth] Cannot signup — Supabase URL is a placeholder")
             return {"success": False, "error": "Supabase credentials not configured"}
 
-        url = f"{self.supabase_url}/auth/v1/signup"
+        url = f"{self.supabase_url}/auth/v1/signup?redirect_to={quote(AUTH_EMAIL_REDIRECT, safe='')}"
         headers = {
             "apikey": self.supabase_anon_key,
             "Authorization": f"Bearer {self.supabase_anon_key}",
             "Content-Type": "application/json"
         }
-        data = {
-            "email": email,
-            "password": password,
-            "options": {
-                "emailRedirectTo": "riff://auth/callback",
-                "email_redirect_to": "riff://auth/callback",
-            },
-        }
+        data = {"email": email, "password": password}
 
-        logger.info("[Auth] POST %s with emailRedirectTo/email_redirect_to: riff://auth/callback", url)
+        logger.info("[Auth] POST %s", url)
 
         try:
-            response = httpx.post(url, headers=headers, json=data, timeout=15.0)
+            response = httpx.post(url, headers=headers, json=data, timeout=30.0)
             logger.info(f"[Auth] Signup response status: {response.status_code}")
 
             if response.status_code not in (200, 201):
@@ -432,7 +430,8 @@ class AuthManager:
             "word_count": word_count,
             "recording_seconds": recording_seconds,
             "style": style,
-            "script_mode": script_mode
+            "script_mode": script_mode,
+            "device_id": self.config.config.get("device", {}).get("device_id"),
         }
         
         try:
@@ -575,3 +574,164 @@ class AuthManager:
                 json.dump(cache, f, indent=2)
         except Exception as e:
             logger.error(f"Error saving cache: {e}")
+
+    def handle_auth_callback_url(self, url: str) -> Dict[str, Any]:
+        """Parse riff:// callback, store tokens, write auth_state.json."""
+        parsed = urlparse(url)
+        params: Dict[str, str] = {}
+        if parsed.query:
+            for key, values in parse_qs(parsed.query, keep_blank_values=True).items():
+                if values:
+                    params[key] = values[0]
+        if parsed.fragment:
+            for key, values in parse_qs(parsed.fragment, keep_blank_values=True).items():
+                if values:
+                    params[key] = values[0]
+
+        if params.get("error_description") or params.get("error"):
+            err = params.get("error_description") or params.get("error")
+            logger.error("[Auth] Callback error: %s", err)
+            return {"success": False, "error": err}
+
+        access_token = params.get("access_token")
+        refresh_token = params.get("refresh_token")
+        if not access_token or not refresh_token:
+            return {"success": False, "error": "Missing tokens in callback"}
+
+        self._store_tokens(access_token, refresh_token)
+        email, user_id = self._identity_from_access_token(access_token)
+        self._write_auth_state(True, email, user_id)
+        self._auth_authenticated = True
+        self._auth_email = email
+        self._auth_user_id = user_id
+        self.log_login_event("email_confirm" if parsed.netloc == "auth" else "oauth_google", True)
+        logger.info("[Auth] Callback stored session for %s", email)
+        return {"success": True, "email": email, "user_id": user_id}
+
+    def _identity_from_access_token(self, access_token: str) -> Tuple[str, str]:
+        try:
+            import base64
+            parts = access_token.split(".")
+            padded = parts[1] + "=" * (-len(parts[1]) % 4)
+            payload = json.loads(base64.urlsafe_b64decode(padded))
+            return payload.get("email", ""), payload.get("sub", "")
+        except Exception as e:
+            logger.warning("[Auth] JWT decode failed: %s", e)
+            return "", ""
+
+    def _auth_headers(self) -> Optional[Dict[str, str]]:
+        token = self._get_access_token()
+        if not token:
+            return None
+        return {
+            "Authorization": f"Bearer {token}",
+            "apikey": self.supabase_anon_key,
+            "Content-Type": "application/json",
+        }
+
+    def register_this_device(self) -> None:
+        headers = self._auth_headers()
+        if not headers:
+            return
+        device_id = self.config.config.get("device", {}).get("device_id") or ""
+        if not device_id:
+            return
+        url = f"{self.supabase_url}/functions/v1/register-device"
+        body = {
+            "device_id": device_id,
+            "device_name": platform.node() or "Mac",
+            "device_type": "mac",
+            "os_version": platform.mac_ver()[0],
+            "app_version": "1.2.5",
+        }
+        try:
+            response = httpx.post(url, headers=headers, json=body, timeout=15.0)
+            logger.info("[Auth] register-device status=%s body=%s", response.status_code, response.text[:200])
+        except Exception as e:
+            logger.warning("[Auth] register-device failed: %s", e)
+
+    def upload_history_entry(self, timestamp: str, original: str, refined: str, style: str, script_mode: str) -> None:
+        headers = self._auth_headers()
+        if not headers:
+            return
+        device_id = self.config.config.get("device", {}).get("device_id")
+        url = f"{self.supabase_url}/functions/v1/sync-history"
+        body = {
+            "timestamp": timestamp,
+            "original": original,
+            "refined": refined,
+            "style": style,
+            "script_mode": script_mode,
+            "device_id": device_id,
+        }
+        try:
+            httpx.post(url, headers=headers, json=body, timeout=15.0)
+        except Exception as e:
+            logger.warning("[Auth] history upload failed: %s", e)
+
+    def download_history(self) -> list:
+        headers = self._auth_headers()
+        if not headers:
+            return []
+        url = f"{self.supabase_url}/functions/v1/sync-history"
+        try:
+            response = httpx.get(url, headers=headers, timeout=20.0)
+            if response.status_code == 200:
+                return response.json().get("history") or []
+        except Exception as e:
+            logger.warning("[Auth] history download failed: %s", e)
+        return []
+
+    def sync_user_settings(self, hotkey: str, style: str, script_mode: str, onboarding_completed: bool) -> None:
+        headers = self._auth_headers()
+        if not headers:
+            return
+        user_id = self._auth_user_id
+        if not user_id:
+            return
+        url = f"{self.supabase_url}/rest/v1/user_settings?on_conflict=user_id"
+        body = {
+            "user_id": user_id,
+            "hotkey": hotkey,
+            "style": style,
+            "script_mode": script_mode,
+            "onboarding_completed": onboarding_completed,
+        }
+        headers = {**headers, "Prefer": "resolution=merge-duplicates"}
+        try:
+            httpx.post(url, headers=headers, json=body, timeout=10.0)
+        except Exception as e:
+            logger.warning("[Auth] settings sync failed: %s", e)
+
+    def pull_user_settings(self) -> Optional[Dict[str, Any]]:
+        headers = self._auth_headers()
+        if not headers:
+            return None
+        url = f"{self.supabase_url}/rest/v1/user_settings?select=hotkey,style,script_mode,onboarding_completed"
+        try:
+            response = httpx.get(url, headers=headers, timeout=10.0)
+            if response.status_code == 200:
+                rows = response.json()
+                return rows[0] if rows else None
+        except Exception as e:
+            logger.warning("[Auth] settings pull failed: %s", e)
+        return None
+
+    def log_login_event(self, method: str, success: bool, error: str = None) -> None:
+        headers = self._auth_headers()
+        if not headers:
+            return
+        url = f"{self.supabase_url}/rest/v1/login_events"
+        body = {
+            "user_id": self._auth_user_id or None,
+            "email": self._auth_email,
+            "method": method,
+            "success": success,
+            "device_id": self.config.config.get("device", {}).get("device_id"),
+            "error": error,
+        }
+        headers = {**headers, "Prefer": "return=minimal"}
+        try:
+            httpx.post(url, headers=headers, json=body, timeout=8.0)
+        except Exception as e:
+            logger.debug("[Auth] login_events insert failed: %s", e)
