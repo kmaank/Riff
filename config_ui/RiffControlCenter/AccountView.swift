@@ -14,20 +14,26 @@ struct AccountView: View {
     @State private var isLoadingPortal: Bool = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 30) {
-                userInfoSection
-                Divider()
-                subscriptionSection
-                Divider()
-                if authManager.subscriptionTier == "free" {
-                    apiKeySection
-                    Divider()
+        Group {
+            if authManager.isAuthenticated {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 30) {
+                        userInfoSection
+                        Divider()
+                        subscriptionSection
+                        Divider()
+                        if authManager.subscriptionTier == "free" {
+                            apiKeySection
+                            Divider()
+                        }
+                        signOutButton
+                        Spacer()
+                    }
+                    .padding(30)
                 }
-                signOutButton
-                Spacer()
+            } else {
+                LoginView()
             }
-            .padding(30)
         }
         .sheet(isPresented: $showSubscriptionView) {
             SubscriptionView()

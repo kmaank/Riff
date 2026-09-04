@@ -18,10 +18,10 @@ struct RiffControlCenterApp: App {
                         settings.loadConfig()
                     }
                 }
-                // Phase 3: Handle OAuth callback
+                // Handle OAuth callback (riff://oauth/callback) and email confirmation (riff://auth/callback)
                 .onOpenURL { url in
-                    if url.scheme == "riff" && url.host == "oauth" {
-                        authManager.handleOAuthCallback(url: url)
+                    if url.scheme == "riff" && (url.host == "oauth" || url.host == "auth") {
+                        authManager.handleAuthCallback(url: url)
                     }
                 }
         }

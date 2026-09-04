@@ -17,6 +17,9 @@ Riff_windows.spec
 build_app.ps1
 assets/AppIcon.ico
 
+# Local build output (DMG, logs)
+build_output/
+
 # Temp files
 *.wav
 __MACOSX/

@@ -225,7 +225,10 @@ class SwiftAuthManager: ObservableObject {
                 AuthLogger.log("Login failed HTTP \(httpResponse.statusCode): \(responseBody)")
 
                 let decoded = try? JSONDecoder().decode(ErrorResponse.self, from: data)
-                let userMessage = decoded?.errorDescription ?? decoded?.msg ?? "Login failed. Please try again."
+                let userMessage = Self.userFacingAuthError(
+                    raw: decoded?.userMessage,
+                    default: "Login failed. Please try again."
+                )
                 AuthLogger.log("User-facing error: \(userMessage)")
                 await MainActor.run {
                     self.isLoading = false
@@ -299,10 +302,21 @@ class SwiftAuthManager: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 30
 
-        let body: [String: Any] = ["email": email, "password": password]
+        // emailRedirectTo: Where user goes after clicking "Confirm" in email (desktop app)
+        // Must be in Supabase Redirect URLs. riff://auth/callback opens our app with tokens.
+        // Send both camelCase (JS API) and snake_case (GoTrue REST) for compatibility
+        let body: [String: Any] = [
+            "email": email,
+            "password": password,
+            "options": [
+                "emailRedirectTo": "riff://auth/callback",
+                "email_redirect_to": "riff://auth/callback"
+            ]
+        ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         AuthLogger.log("Request headers: apikey=\(supabaseAnonKey.prefix(20))..., Authorization=Bearer ..., Content-Type=application/json")
+        AuthLogger.log("Signup with emailRedirectTo: riff://auth/callback")
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -347,7 +361,10 @@ class SwiftAuthManager: ObservableObject {
                 AuthLogger.log("Signup failed HTTP \(httpResponse.statusCode): \(responseBody)")
 
                 let decoded = try? JSONDecoder().decode(ErrorResponse.self, from: data)
-                let userMessage = decoded?.errorDescription ?? decoded?.msg ?? "Signup failed. Please try again."
+                let userMessage = Self.userFacingAuthError(
+                    raw: decoded?.userMessage,
+                    default: "Signup failed. Please try again."
+                )
                 AuthLogger.log("User-facing error: \(userMessage)")
                 await MainActor.run {
                     self.isLoading = false
@@ -382,6 +399,15 @@ class SwiftAuthManager: ObservableObject {
             }
             throw AuthError.signupFailed(userMessage)
         }
+    }
+
+    /// Convert raw API error to user-facing message (e.g. "Invalid API key" → helpful instructions)
+    private static func userFacingAuthError(raw: String?, default defaultMsg: String) -> String {
+        guard let raw = raw, !raw.isEmpty else { return defaultMsg }
+        if raw.lowercased().contains("invalid api key") {
+            return "Invalid Supabase API key. Get the anon key from Supabase Dashboard → Settings → API, then edit auth.supabase_anon_key in Riff config. Open via Finder: Cmd+Shift+G → paste: ~/Library/Application Support/Riff"
+        }
+        return raw
     }
 
     /// Fire-and-forget connectivity diagnostic written only to debug_auth.log
@@ -448,8 +474,10 @@ class SwiftAuthManager: ObservableObject {
         }
     }
 
-    func handleOAuthCallback(url: URL) {
-        AuthLogger.log("handleOAuthCallback called with URL: \(url.absoluteString)")
+    /// Handles both OAuth (riff://oauth/callback) and email confirmation (riff://auth/callback) redirects.
+    /// Both pass access_token and refresh_token in the URL fragment.
+    func handleAuthCallback(url: URL) {
+        AuthLogger.log("handleAuthCallback called with URL: \(url.absoluteString)")
 
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let fragment = components.fragment else {
@@ -461,11 +489,23 @@ class SwiftAuthManager: ObservableObject {
             .reduce(into: [String: String]()) { result, param in
                 let parts = param.components(separatedBy: "=")
                 if parts.count == 2 {
-                    result[parts[0]] = parts[1]
+                    // Decode URL-encoded values (e.g. error_description=Email+link+is+invalid)
+                    let value = parts[1].replacingOccurrences(of: "+", with: " ")
+                        .removingPercentEncoding ?? parts[1]
+                    result[parts[0]] = value
                 }
             }
 
-        AuthLogger.log("OAuth callback params: \(params.keys.joined(separator: ", "))")
+        AuthLogger.log("Auth callback params: \(params.keys.joined(separator: ", "))")
+
+        // Check for error (e.g. otp_expired, access_denied)
+        if let errorDesc = params["error_description"] ?? params["error"] {
+            AuthLogger.log("Auth callback error: \(errorDesc)")
+            DispatchQueue.main.async {
+                self.errorMessage = errorDesc
+            }
+            return
+        }
 
         if let accessToken = params["access_token"],
            let refreshToken = params["refresh_token"] {
@@ -489,13 +529,7 @@ class SwiftAuthManager: ObservableObject {
                 AuthLogger.log("ERROR: Failed to decode OAuth JWT")
             }
         } else {
-            AuthLogger.log("ERROR: OAuth callback missing access_token or refresh_token")
-            if let errorDesc = params["error_description"] {
-                AuthLogger.log("OAuth error: \(errorDesc)")
-                DispatchQueue.main.async {
-                    self.errorMessage = errorDesc
-                }
-            }
+            AuthLogger.log("ERROR: Auth callback missing access_token or refresh_token")
         }
     }
 
@@ -747,10 +781,17 @@ struct AuthResponse: Codable {
 struct ErrorResponse: Codable {
     let errorDescription: String?
     let msg: String?
+    let message: String?  // Supabase uses "message" (e.g. "Invalid API key")
 
     enum CodingKeys: String, CodingKey {
         case errorDescription = "error_description"
         case msg
+        case message
+    }
+
+    /// User-facing error string from any of the supported fields
+    var userMessage: String? {
+        errorDescription ?? msg ?? message
     }
 }
 

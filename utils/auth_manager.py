@@ -186,9 +186,16 @@ class AuthManager:
             "Authorization": f"Bearer {self.supabase_anon_key}",
             "Content-Type": "application/json"
         }
-        data = {"email": email, "password": password}
+        data = {
+            "email": email,
+            "password": password,
+            "options": {
+                "emailRedirectTo": "riff://auth/callback",
+                "email_redirect_to": "riff://auth/callback",
+            },
+        }
 
-        logger.info(f"[Auth] POST {url}")
+        logger.info("[Auth] POST %s with emailRedirectTo/email_redirect_to: riff://auth/callback", url)
 
         try:
             response = httpx.post(url, headers=headers, json=data, timeout=15.0)
