@@ -7,9 +7,8 @@ struct ContentView: View {
 
     var body: some View {
         let onboardingDone = settings.config.onboarding_completed ?? false
-        let hasKey = !settings.config.api.api_key.isEmpty
-        let paid = authManager.isPaidPlan
-        let needsSetup = !onboardingDone || !authManager.isAuthenticated || (!hasKey && !paid) || (authManager.needsPlanSelection && !paid)
+        let hasKey = settings.config.api.api_key.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("gsk_")
+        let needsSetup = !onboardingDone || !authManager.isAuthenticated || !hasKey
 
         if needsSetup {
             OnboardingView()

@@ -1,10 +1,9 @@
-// Edge Function: get-api-key
-// Returns the signed-in user's wrapped BYOK Groq key.
-// Ciphertext in Postgres is never readable without the server KEK.
+// Edge Function: save-groq-key
+// Wraps the signed-in user's Groq key and stores it on their account.
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { getSupabaseServiceClient, getUserId, corsHeaders } from "../_shared/clients.ts";
-import { isWrapped, unwrapApiKey, wrapApiKey } from "../_shared/crypto.ts";
+import { wrapApiKey } from "../_shared/crypto.ts";
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -20,48 +19,35 @@ serve(async (req) => {
       );
     }
 
+    const body = await req.json().catch(() => ({}));
+    const apiKey = typeof body.api_key === "string" ? body.api_key.trim() : "";
+    if (!apiKey.startsWith("gsk_")) {
+      return new Response(
+        JSON.stringify({ error: "A Groq key starting with gsk_ is required" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    const wrapped = await wrapApiKey(apiKey);
     const supabase = getSupabaseServiceClient();
-    const { data: row, error } = await supabase
+    const { error } = await supabase
       .from("user_groq_keys")
-      .select("user_id, encrypted_key")
-      .eq("user_id", userId)
-      .maybeSingle();
+      .upsert({ user_id: userId, encrypted_key: wrapped }, { onConflict: "user_id" });
 
     if (error) {
-      console.error("get-api-key lookup failed");
+      console.error("save-groq-key upsert failed");
       return new Response(
         JSON.stringify({ error: "Internal server error" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
-    if (!row?.encrypted_key) {
-      return new Response(
-        JSON.stringify({ error: "not_found" }),
-        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
-    }
-
-    const plaintext = await unwrapApiKey(row.encrypted_key);
-
-    if (!isWrapped(row.encrypted_key)) {
-      try {
-        const wrapped = await wrapApiKey(plaintext);
-        await supabase
-          .from("user_groq_keys")
-          .update({ encrypted_key: wrapped })
-          .eq("user_id", userId);
-      } catch (_e) {
-        console.error("Failed to re-wrap stored BYOK key");
-      }
-    }
-
     return new Response(
-      JSON.stringify({ api_key: plaintext }),
+      JSON.stringify({ ok: true }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch (error) {
-    console.error("Error in get-api-key:", error?.message || error);
+    console.error("Error in save-groq-key:", error?.message || error);
     return new Response(
       JSON.stringify({ error: "Internal server error" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },

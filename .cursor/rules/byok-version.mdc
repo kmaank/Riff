@@ -1,0 +1,15 @@
+---
+description: BYOK product rules for the byok-version branch
+alwaysApply: true
+---
+
+# Riff BYOK version
+
+This branch is free Bring-Your-Own-Key. Do not reintroduce Stripe, paywalls, or a Riff-managed Groq key.
+
+- Login stays. After signup or login, restore the Groq key from `get-api-key` if the account has one.
+- First-time users paste a `gsk_` key once. Save locally and to `save-groq-key` (AES wrap on the server).
+- Reinstall and Android: log in → key comes back. Do not ask them to paste again.
+- Sign out wipes the local `config.json` key. The wrapped copy on the account stays.
+- Devices call Groq directly. Riff never proxies transcription on this branch.
+- Postgres stores only ciphertext in `user_groq_keys`. Clients never read that table.

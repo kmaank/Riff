@@ -27,7 +27,6 @@ from utils.permissions import PermissionManager
 # Phase 2: Authentication
 try:
     from utils.auth_manager import AuthManager
-    from utils.subscription_config import get_tier_features
     AUTH_AVAILABLE = True
 except ImportError:
     AUTH_AVAILABLE = False
@@ -188,25 +187,16 @@ class ProcessingThread(threading.Thread):
                 logging.warning(f"Riff blocked by quota: {reason}")
                 self.notification_callback("Limit Reached", reason)
                 return
-            paid_key = self.auth_manager.get_effective_api_key()
-            if paid_key:
-                self._ensure_clients(paid_key)
+            user_key = self.auth_manager.get_effective_api_key()
+            if not user_key:
+                user_key = self.auth_manager.sync_byok_key()
+            if user_key:
+                self._ensure_clients(user_key)
 
         # Guard: API key may not be configured yet (first run)
         if not self.transcriber:
             logging.warning("Transcriber not initialized — API key missing")
-            paid = False
-            if AUTH_AVAILABLE and self.auth_manager:
-                try:
-                    paid = not get_tier_features(self.auth_manager.get_tier()).byok
-                except Exception:
-                    paid = False
-            self.notification_callback(
-                "Setup Required",
-                "Could not load your Riff key. Check your connection and try again."
-                if paid
-                else "Please set your Groq API key in Settings",
-            )
+            self.notification_callback("Setup Required", "Please set your Groq API key in Settings")
             return
 
         # Calculate duration for watchdog
@@ -404,18 +394,13 @@ class RiffApp:
             except Exception as e:
                 logging.warning(f"[Auth] Failed to initialize AuthManager: {e}")
 
-        # Load API Key (BYOK for free tier, 24h RAM lease for paid)
+        # Load API Key (account-synced BYOK)
         self._uses_byok = True
         if self.auth_manager:
-            self._uses_byok = get_tier_features(self.auth_manager.get_tier()).byok
+            if self.auth_manager.is_authenticated:
+                self.auth_manager.sync_byok_key()
             self.api_key = self.auth_manager.get_effective_api_key()
-            if self.api_key:
-                logging.info("[Auth] Groq client ready (%s)", "BYOK" if self._uses_byok else "paid 24h RAM lease")
-            else:
-                logging.info(
-                    "[Auth] Groq key not ready yet (%s)",
-                    "enter key in Settings" if self._uses_byok else "will lease on first riff",
-                )
+            logging.info("[Auth] Groq client %s", "ready (BYOK)" if self.api_key else "waiting for key")
         else:
             self.api_key = self.config.get("api.api_key")
 

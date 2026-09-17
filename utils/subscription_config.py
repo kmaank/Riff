@@ -26,11 +26,11 @@ class TierLimits:
 # Tier definitions
 TIER_LIMITS: Dict[str, TierLimits] = {
     "free": TierLimits(
-        riffs_limit=100,
-        seconds_limit=None,  # Unlimited recording time
-        all_styles=False,    # Only clean + casual
-        custom_prompts=False,
-        byok=True,           # Bring Your Own Key
+        riffs_limit=None,
+        seconds_limit=None,
+        all_styles=True,
+        custom_prompts=True,
+        byok=True,
         priority=False
     ),
     "starter": TierLimits(
@@ -38,7 +38,7 @@ TIER_LIMITS: Dict[str, TierLimits] = {
         seconds_limit=7200,
         all_styles=True,
         custom_prompts=False,
-        byok=False,
+        byok=True,
         priority=False
     ),
     "monthly": TierLimits(
@@ -46,7 +46,7 @@ TIER_LIMITS: Dict[str, TierLimits] = {
         seconds_limit=None,
         all_styles=True,
         custom_prompts=True,
-        byok=False,
+        byok=True,
         priority=True
     ),
     "yearly": TierLimits(
@@ -54,7 +54,7 @@ TIER_LIMITS: Dict[str, TierLimits] = {
         seconds_limit=None,
         all_styles=True,
         custom_prompts=True,
-        byok=False,
+        byok=True,
         priority=True
     ),
     "pro": TierLimits(
@@ -62,7 +62,7 @@ TIER_LIMITS: Dict[str, TierLimits] = {
         seconds_limit=None,  # Unlimited
         all_styles=True,
         custom_prompts=True,
-        byok=False,
+        byok=True,
         priority=True
     ),
     "lifetime": TierLimits(
@@ -70,7 +70,7 @@ TIER_LIMITS: Dict[str, TierLimits] = {
         seconds_limit=None,  # Unlimited
         all_styles=True,
         custom_prompts=True,
-        byok=False,
+        byok=True,
         priority=True
     ),
 }

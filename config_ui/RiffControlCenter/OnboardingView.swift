@@ -11,11 +11,7 @@ struct OnboardingView: View {
     @State private var micGranted = false
     @State private var testDriveBaseline = 0
     @State private var testDriveSucceeded = false
-    @State private var waitingForPayment = false
-
-    private var paidManagedKey: Bool {
-        authManager.isPaidPlan
-    }
+    @State private var restoringKey = false
 
     var body: some View {
         VStack(spacing: 16) {
@@ -25,10 +21,8 @@ struct OnboardingView: View {
             } else if step == 2 {
                 accountStep
             } else if step == 3 {
-                planStep
-            } else if step == 4 {
                 apiKeyStep
-            } else if step == 5 {
+            } else if step == 4 {
                 permissionsStep
             } else {
                 testDriveStep
@@ -43,18 +37,11 @@ struct OnboardingView: View {
                 advanceAfterAccount()
             }
         }
-        .onChange(of: authManager.isPaidPlan) { paid in
-            if paid && (step == 3 || step == 4) {
-                waitingForPayment = false
-                authManager.clearPlanSelection()
-                withAnimation { step = 5 }
-            }
-        }
     }
 
     var progress: some View {
         HStack(spacing: 8) {
-            ForEach(1...6, id: \.self) { n in
+            ForEach(1...5, id: \.self) { n in
                 Circle()
                     .fill(n <= step ? Color.accentColor : Color.gray.opacity(0.25))
                     .frame(width: 8, height: 8)
@@ -70,7 +57,7 @@ struct OnboardingView: View {
                 .frame(width: 88, height: 88)
             Text("Welcome to Riff")
                 .font(.system(size: 28, weight: .bold))
-            Text("Create an account, pick a plan, then grant permissions from the next screens.\nTakes about a minute.")
+            Text("Create an account, paste your Groq key once, then grant permissions.\nTakes about a minute.")
                 .multilineTextAlignment(.center)
                 .foregroundColor(.secondary)
             Spacer()
@@ -95,58 +82,12 @@ struct OnboardingView: View {
         .padding(.horizontal)
     }
 
-    var planStep: some View {
-        VStack(spacing: 12) {
-            SubscriptionView(
-                embedded: true,
-                onChoseFree: {
-                    waitingForPayment = false
-                    withAnimation { step = 4 }
-                },
-                onPaidCheckoutOpened: {
-                    waitingForPayment = true
-                }
-            )
-            .environmentObject(authManager)
-
-            if waitingForPayment {
-                Text("Finish checkout in your browser. This screen continues when payment completes.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                Button("Continue with Free instead") {
-                    waitingForPayment = false
-                    withAnimation { step = 4 }
-                }
-            }
-
-            HStack {
-                Button("Back") { withAnimation { step = 2 } }
-                Spacer()
-            }
-        }
-        .padding(.horizontal, 8)
-        .onReceive(Timer.publish(every: 3, on: .main, in: .common).autoconnect()) { _ in
-            guard waitingForPayment else { return }
-            Task {
-                try? await authManager.validateSubscription()
-                if authManager.isPaidPlan {
-                    await MainActor.run {
-                        waitingForPayment = false
-                        authManager.clearPlanSelection()
-                        withAnimation { step = 5 }
-                    }
-                }
-            }
-        }
-    }
-
     var apiKeyStep: some View {
         VStack(spacing: 20) {
             Text("Connect Groq")
                 .font(.title)
                 .fontWeight(.bold)
-            Text("Free accounts use your own Groq key. Paid plans skip this.")
+            Text("Paste your Groq key once. It is saved to your Riff account so Android and reinstalls pick it up after login.")
                 .multilineTextAlignment(.center)
                 .foregroundColor(.secondary)
 
@@ -165,11 +106,11 @@ struct OnboardingView: View {
             Spacer()
             HStack {
                 Button("Back") {
-                    withAnimation { step = authManager.needsPlanSelection ? 3 : 2 }
+                    withAnimation { step = 2 }
                 }
                 Button("Next") {
                     saveKey()
-                    withAnimation { step = 5 }
+                    withAnimation { step = 4 }
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!isKeyValid)
@@ -177,9 +118,6 @@ struct OnboardingView: View {
         }
         .padding()
         .onAppear {
-            if paidManagedKey {
-                withAnimation { step = 5 }
-            }
             apiKeyInput = settings.config.api.api_key
             isKeyValid = apiKeyInput.trimmingCharacters(in: .whitespaces).starts(with: "gsk_")
         }
@@ -227,9 +165,9 @@ struct OnboardingView: View {
             Spacer()
             HStack {
                 Button("Back") {
-                    withAnimation { step = paidManagedKey ? (authManager.needsPlanSelection ? 3 : 2) : 4 }
+                    withAnimation { step = 3 }
                 }
-                Button("Next") { withAnimation { step = 6 } }
+                Button("Next") { withAnimation { step = 5 } }
                     .buttonStyle(.borderedProminent)
                     .disabled(!isAccessibilityTrusted())
             }
@@ -280,7 +218,7 @@ struct OnboardingView: View {
 
             Spacer()
             HStack {
-                Button("Back") { withAnimation { step = 5 } }
+                Button("Back") { withAnimation { step = 4 } }
                 Button("Start Riffing") {
                     completeOnboarding()
                 }
@@ -308,6 +246,8 @@ struct OnboardingView: View {
         newConfig.onboarding_completed = false
         settings.config = newConfig
         settings.saveConfig()
+        let key = newConfig.api.api_key
+        Task { await authManager.saveCloudGroqKey(key) }
     }
 
     func completeOnboarding() {
@@ -319,12 +259,19 @@ struct OnboardingView: View {
     }
 
     func advanceAfterAccount() {
-        if authManager.needsPlanSelection && !paidManagedKey {
-            withAnimation { step = 3 }
-        } else if paidManagedKey {
-            withAnimation { step = 5 }
-        } else {
-            withAnimation { step = 4 }
+        restoringKey = true
+        Task {
+            _ = await authManager.syncGroqKeyWithCloud(localKey: settings.config.api.api_key)
+            await MainActor.run {
+                settings.loadConfig()
+                restoringKey = false
+                let key = settings.config.api.api_key.trimmingCharacters(in: .whitespacesAndNewlines)
+                if key.hasPrefix("gsk_") {
+                    withAnimation { step = 4 }
+                } else {
+                    withAnimation { step = 3 }
+                }
+            }
         }
     }
 
@@ -333,16 +280,13 @@ struct OnboardingView: View {
             step = settings.config.onboarding_completed == true ? 2 : 1
             return
         }
-        if authManager.needsPlanSelection && !paidManagedKey {
-            step = 3
-            return
-        }
-        if !paidManagedKey && settings.config.api.api_key.isEmpty {
-            step = 4
+        let key = settings.config.api.api_key.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !key.hasPrefix("gsk_") {
+            advanceAfterAccount()
             return
         }
         if !(settings.config.onboarding_completed ?? false) {
-            step = 5
+            step = 4
         }
     }
 

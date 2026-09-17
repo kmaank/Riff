@@ -256,13 +256,17 @@ class AuthManager:
             return {"success": False, "error": str(e)}
     
     def logout(self):
-        """Logout and clear tokens"""
+        """Logout and clear tokens plus the local Groq key. Cloud copy stays."""
         self._access_token = None
         self._refresh_token = None
         self._managed_key = None
         self._managed_key_expires = 0.0
         self._cached_subscription = None
         self._auth_authenticated = False
+        try:
+            self.config.set("api.api_key", "")
+        except Exception:
+            pass
         try:
             if self.session_path.exists():
                 self.session_path.unlink()
@@ -468,78 +472,67 @@ class AuthManager:
     # ========================================================================
     
     def get_effective_api_key(self) -> Optional[str]:
-        """
-        Get effective API key based on tier
-        - Free tier: user's BYOK key from config
-        - Paid tiers: managed key from backend
-        """
-        tier = self.get_tier()
-        features = get_tier_features(tier)
-        
-        if features.byok:
-            # Free tier: use BYOK
-            return self.config.config.get("api", {}).get("api_key", "")
-        else:
-            # Paid tiers: fetch managed key
-            return self._fetch_managed_key()
-    
-    def _fetch_managed_key(self) -> Optional[str]:
-        """
-        Unwrap the managed Groq key from the server at most about once per 24h.
-        Plaintext lives in process memory only — never session.json / config / UI.
-        The Mac then calls Groq directly so riffs are not proxied.
-        """
-        now = time.time()
-        if self._managed_key and now < self._managed_key_expires - 60:
-            return self._managed_key
+        """User's BYOK Groq key from local config (restored from the account on login)."""
+        key = (self.config.config.get("api", {}) or {}).get("api_key", "") or ""
+        return key if key.startswith("gsk_") else (key or None)
 
-        # Drop any leftover plaintext that older builds wrote to disk
-        session = self._read_session()
-        if session.get("managed_groq_key"):
-            self._write_session(managed_groq_key=None)
+    def sync_byok_key(self) -> Optional[str]:
+        """
+        Account is the source of truth. Pull the wrapped key after login;
+        if this device has a key and the account does not, push it up.
+        """
+        local = (self.config.config.get("api", {}) or {}).get("api_key", "") or ""
+        cloud = self._fetch_cloud_groq_key()
+        if cloud:
+            if cloud != local:
+                try:
+                    self.config.set("api.api_key", cloud)
+                except Exception as e:
+                    logger.error("[Auth] Failed to write restored Groq key: %s", e)
+            return cloud
+        if local.startswith("gsk_"):
+            self._save_cloud_groq_key(local)
+            return local
+        return None
 
+    def _fetch_cloud_groq_key(self) -> Optional[str]:
         access_token = self._get_access_token()
         if not access_token:
-            logger.error("Cannot fetch managed key: not authenticated")
             return None
-
         url = f"{self.supabase_url}/functions/v1/get-api-key"
         headers = {
             "Authorization": f"Bearer {access_token}",
             "apikey": self.supabase_anon_key,
         }
-
         try:
             response = httpx.post(url, headers=headers, json={}, timeout=10.0)
-            response.raise_for_status()
-            result = response.json()
-            api_key = result.get("api_key")
-            if not api_key:
-                logger.error("Managed key response missing api_key")
+            if response.status_code == 404:
                 return None
-
-            lease = int(result.get("lease_seconds") or 24 * 3600)
-            expires_at = result.get("expires_at")
-            if expires_at:
-                try:
-                    exp = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-                    self._managed_key_expires = exp.timestamp()
-                except Exception:
-                    self._managed_key_expires = now + lease
-            else:
-                self._managed_key_expires = now + lease
-
-            self._managed_key = api_key
-            logger.info(
-                "[Auth] Managed Groq key leased until %s (RAM only)",
-                datetime.fromtimestamp(self._managed_key_expires).isoformat(),
-            )
-            return api_key
+            response.raise_for_status()
+            api_key = response.json().get("api_key") or ""
+            return api_key if api_key.startswith("gsk_") else None
         except httpx.HTTPError as e:
-            logger.error(f"Failed to fetch managed key: {e}")
-            if self._managed_key and now < self._managed_key_expires:
-                return self._managed_key
+            logger.error("[Auth] Failed to fetch account Groq key: %s", e)
             return None
+
+    def _save_cloud_groq_key(self, api_key: str) -> bool:
+        access_token = self._get_access_token()
+        if not access_token or not api_key.startswith("gsk_"):
+            return False
+        url = f"{self.supabase_url}/functions/v1/save-groq-key"
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "apikey": self.supabase_anon_key,
+            "Content-Type": "application/json",
+        }
+        try:
+            response = httpx.post(url, headers=headers, json={"api_key": api_key}, timeout=10.0)
+            response.raise_for_status()
+            logger.info("[Auth] Groq key saved to account")
+            return True
+        except httpx.HTTPError as e:
+            logger.error("[Auth] Failed to save Groq key to account: %s", e)
+            return False
     
     # ========================================================================
     # IPC with Swift UI

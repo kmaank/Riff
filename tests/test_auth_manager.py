@@ -19,7 +19,14 @@ def mock_config():
         "auth.supabase_anon_key": "test-anon-key",
         "api.api_key": "test-groq-key",
     }.get(key, default)
-    config.config_path = "/tmp/test_config.json"
+    config.config = {
+        "api": {"api_key": "test-groq-key"},
+        "auth": {
+            "supabase_url": "https://test-project.supabase.co",
+            "supabase_anon_key": "test-anon-key",
+        },
+        "device": {},
+    }
     return config
 
 
@@ -123,44 +130,25 @@ def test_can_riff_allowed(auth_manager):
 
 
 def test_get_effective_api_key_byok(auth_manager, mock_config):
-    """Test get_effective_api_key for BYOK tier."""
-    with patch.object(auth_manager, 'get_tier', return_value='free'):
-        api_key = auth_manager.get_effective_api_key()
-
-    assert api_key == "test-groq-key"  # From config
+    """Local BYOK key is used for Groq."""
+    api_key = auth_manager.get_effective_api_key()
+    assert api_key == "test-groq-key"
 
 
-def test_get_effective_api_key_managed(auth_manager):
-    """Paid tiers lease the managed Groq key instead of using BYOK."""
-    with patch.object(auth_manager, 'get_tier', return_value='monthly'):
-        with patch.object(auth_manager, '_fetch_managed_key', return_value='gsk_leased') as fetch:
-            api_key = auth_manager.get_effective_api_key()
-
-    assert api_key == "gsk_leased"
-    fetch.assert_called_once()
-
-
-def test_managed_key_stays_in_ram(auth_manager, tmp_path):
-    """Leased keys must not be written to session.json."""
-    auth_manager.session_path = tmp_path / "session.json"
-    auth_manager._write_session = MagicMock()
+def test_sync_byok_key_restores_from_cloud(auth_manager):
+    """Account key wins and is written locally."""
+    auth_manager.config.set = Mock()
     mock_response = Mock()
+    mock_response.status_code = 200
     mock_response.raise_for_status = Mock()
-    mock_response.json.return_value = {
-        "api_key": "gsk_leased",
-        "lease_seconds": 86400,
-        "expires_at": "2099-01-01T00:00:00Z",
-    }
+    mock_response.json.return_value = {"api_key": "gsk_from_account"}
 
     with patch.object(auth_manager, '_get_access_token', return_value='tok'):
         with patch('utils.auth_manager.httpx.post', return_value=mock_response):
-            first = auth_manager._fetch_managed_key()
-            second = auth_manager._fetch_managed_key()
+            key = auth_manager.sync_byok_key()
 
-    assert first == "gsk_leased"
-    assert second == "gsk_leased"
-    assert auth_manager._managed_key == "gsk_leased"
-    assert "gsk_leased" not in json.dumps(auth_manager._write_session.call_args_list)
+    assert key == "gsk_from_account"
+    auth_manager.config.set.assert_called_with("api.api_key", "gsk_from_account")
 
 
 def test_log_usage_success(auth_manager):

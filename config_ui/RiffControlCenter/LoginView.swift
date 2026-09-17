@@ -18,7 +18,7 @@ struct LoginView: View {
                     .font(compact ? .title2 : .largeTitle)
                     .fontWeight(.bold)
 
-                Text(isSignUp ? "Next you'll choose Free, Monthly, or Yearly" : "Use the email you signed up with")
+                Text(isSignUp ? "Next you'll paste your Groq key once. It follows this account." : "Use the email you signed up with")
                     .foregroundStyle(.secondary)
                     .font(compact ? .subheadline : .body)
             }

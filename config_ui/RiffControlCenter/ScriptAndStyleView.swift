@@ -14,11 +14,7 @@ struct ScriptAndStyleView: View {
 
     // Phase 3: Check if style is allowed for current tier
     private func isStyleAllowed(_ style: String) -> Bool {
-        let tier = authManager.subscriptionTier
-        if tier == "free" {
-            return ["clean", "casual"].contains(style)
-        }
-        return true  // Paid tiers get all styles
+        return true
     }
 
     var body: some View {

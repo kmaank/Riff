@@ -28,8 +28,7 @@ class SwiftAuthManager: ObservableObject {
     @Published var memberSince: String = ""
     @Published var googleOAuthEnabled: Bool = false
     @Published var managedKeyAvailable: Bool = false
-    /// True after a new signup until the user picks Free / Monthly / Yearly.
-    /// Returning logins never set this, so they skip the paywall.
+    /// Kept for older builds that stored this flag. BYOK never shows a paywall.
     @Published var needsPlanSelection: Bool = false
 
     let supabaseUrl: String
@@ -89,7 +88,7 @@ class SwiftAuthManager: ObservableObject {
         // Load cached auth state
         loadCachedState()
         exportSessionFromUserDefaults()
-        needsPlanSelection = UserDefaults.standard.bool(forKey: Self.planSelectionKey)
+        clearPlanSelection()
         startAuthStateMonitor()
         AuthLogger.log("SwiftAuthManager initialized. isAuthenticated=\(isAuthenticated), email=\(userEmail)")
         runStartupConnectivityCheck()
@@ -359,7 +358,7 @@ class SwiftAuthManager: ObservableObject {
 
                     writeAuthState(authenticated: true, email: result.user.email, userId: result.user.id)
                     storeTokens(accessToken: result.accessToken, refreshToken: result.refreshToken)
-                    markJustSignedUp()
+                    clearPlanSelection()
                     logLoginEvent(method: "email_signup", success: true)
                     fetchProfile()
                 } else {
@@ -373,7 +372,7 @@ class SwiftAuthManager: ObservableObject {
                             self.errorMessage = "This email already has an account. Sign in instead. If you forgot the password, tap Forgot password."
                         }
                     } else {
-                        markJustSignedUp()
+                        clearPlanSelection()
                         await MainActor.run {
                             self.isLoading = false
                             self.errorMessage = "Check your email! We sent a confirmation link to \(email)."
@@ -552,8 +551,7 @@ class SwiftAuthManager: ObservableObject {
 
                 writeAuthState(authenticated: true, email: email, userId: userId)
                 if url.host != "oauth" {
-                    // Email confirmation finishes signup — still prompt for a plan.
-                    markJustSignedUp()
+                    clearPlanSelection()
                 }
                 logLoginEvent(method: url.host == "oauth" ? "oauth_google" : "email_confirm", success: true)
                 fetchProfile()
@@ -566,11 +564,7 @@ class SwiftAuthManager: ObservableObject {
     }
 
     func markJustSignedUp() {
-        DispatchQueue.main.async {
-            self.needsPlanSelection = true
-        }
-        UserDefaults.standard.set(true, forKey: Self.planSelectionKey)
-        AuthLogger.log("Marked as new signup — will prompt for plan")
+        clearPlanSelection()
     }
 
     func clearPlanSelection() {
@@ -637,6 +631,7 @@ class SwiftAuthManager: ObservableObject {
 
     func signOut() {
         AuthLogger.log("signOut called")
+        clearLocalApiKey()
 
         isAuthenticated = false
         userEmail = ""
@@ -650,7 +645,95 @@ class SwiftAuthManager: ObservableObject {
 
         writeAuthState(authenticated: false, email: "", userId: "")
         logLoginEvent(method: "sign_out", success: true)
-        AuthLogger.log("Sign out complete — tokens cleared, auth state written")
+        AuthLogger.log("Sign out complete — tokens and local Groq key cleared")
+    }
+
+    // MARK: - Account Groq key
+
+    func syncGroqKeyWithCloud(localKey: String) async -> String {
+        let trimmed = localKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let cloud = await fetchCloudGroqKey(), cloud.hasPrefix("gsk_") {
+            writeLocalApiKey(cloud)
+            AuthLogger.log("Restored Groq key from account")
+            return cloud
+        }
+        if trimmed.hasPrefix("gsk_") {
+            await saveCloudGroqKey(trimmed)
+            return trimmed
+        }
+        return ""
+    }
+
+    func fetchCloudGroqKey() async -> String? {
+        guard let token = currentAccessToken(),
+              let url = URL(string: "\(supabaseUrl)/functions/v1/get-api-key") else {
+            return nil
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Data("{}".utf8)
+        request.timeoutInterval = 15
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if status == 404 { return nil }
+            guard status == 200,
+                  let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let key = obj["api_key"] as? String,
+                  key.hasPrefix("gsk_") else {
+                return nil
+            }
+            return key
+        } catch {
+            AuthLogger.log("fetchCloudGroqKey failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    func saveCloudGroqKey(_ key: String) async {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("gsk_"),
+              let token = currentAccessToken(),
+              let url = URL(string: "\(supabaseUrl)/functions/v1/save-groq-key") else {
+            return
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["api_key": trimmed])
+        request.timeoutInterval = 15
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            AuthLogger.log("saveCloudGroqKey status=\(status)")
+        } catch {
+            AuthLogger.log("saveCloudGroqKey failed: \(error.localizedDescription)")
+        }
+    }
+
+    func writeLocalApiKey(_ key: String) {
+        let configPath = riffDir.appendingPathComponent("config.json")
+        var existing: [String: Any] = [:]
+        if let data = try? Data(contentsOf: configPath),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            existing = obj
+        }
+        var api = existing["api"] as? [String: Any] ?? [:]
+        api["api_key"] = key
+        existing["api"] = api
+        guard let out = try? JSONSerialization.data(withJSONObject: existing, options: [.prettyPrinted, .sortedKeys]) else {
+            return
+        }
+        try? out.write(to: configPath, options: .atomic)
+    }
+
+    func clearLocalApiKey() {
+        writeLocalApiKey("")
     }
 
     // MARK: - Subscription Methods

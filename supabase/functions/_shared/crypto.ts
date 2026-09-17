@@ -1,4 +1,4 @@
-// AES-256-GCM wrap for managed Groq keys.
+// AES-256-GCM wrap for user BYOK Groq keys.
 // KEK never leaves the Edge Function environment.
 
 const PREFIX = "v1.";

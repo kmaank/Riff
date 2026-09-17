@@ -5,7 +5,7 @@ A desktop voice-to-text app that runs in the system tray. Press a hotkey → spe
 - Removes filler words ("um", "uh", "like") automatically
 - Multiple refinement styles: casual, formal, clean, code
 - Works in ANY app (Slack, Email, Code editor, Browser)
-- Powered by Groq API (Whisper + LLaMA)
+- Powered by **your** Groq API key (Whisper + LLaMA). Paste it once after login; it is saved to your Riff account (encrypted) and restored on other devices.
 
 ---
 
@@ -117,6 +117,7 @@ Riff/
 
 | Document | Purpose |
 |----------|---------|
+| `docs/KEY_MANAGEMENT.md` | **BYOK Groq keys:** paste once, encrypt on the account, restore on login |
 | `DOC_1_MASTER_ARCHITECTURE.md` | System design and architecture |
 | `DOC_2_TECHNICAL_SPECIFICATIONS.md` | Detailed module specs |
 | `DOC_3_BUILD_PROMPTS.md` | AI-assisted build prompts |

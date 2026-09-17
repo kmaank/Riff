@@ -12,11 +12,11 @@ export interface TierLimits {
 
 export const TIER_LIMITS: Record<string, TierLimits> = {
   free: {
-    riffs_limit: 100,
-    seconds_limit: null,  // Unlimited recording time
-    all_styles: false,    // Only clean + casual
-    custom_prompts: false,
-    byok: true,           // Must provide own API key
+    riffs_limit: null,
+    seconds_limit: null,
+    all_styles: true,
+    custom_prompts: true,
+    byok: true,
     priority: false,
   },
   starter: {
@@ -24,7 +24,7 @@ export const TIER_LIMITS: Record<string, TierLimits> = {
     seconds_limit: 7200,
     all_styles: true,
     custom_prompts: false,
-    byok: false,
+    byok: true,
     priority: false,
   },
   monthly: {
@@ -32,7 +32,7 @@ export const TIER_LIMITS: Record<string, TierLimits> = {
     seconds_limit: null,
     all_styles: true,
     custom_prompts: true,
-    byok: false,
+    byok: true,
     priority: true,
   },
   yearly: {
@@ -40,7 +40,7 @@ export const TIER_LIMITS: Record<string, TierLimits> = {
     seconds_limit: null,
     all_styles: true,
     custom_prompts: true,
-    byok: false,
+    byok: true,
     priority: true,
   },
   pro: {
@@ -48,7 +48,7 @@ export const TIER_LIMITS: Record<string, TierLimits> = {
     seconds_limit: null,  // Unlimited
     all_styles: true,
     custom_prompts: true,
-    byok: false,
+    byok: true,
     priority: true,
   },
   lifetime: {
@@ -56,7 +56,7 @@ export const TIER_LIMITS: Record<string, TierLimits> = {
     seconds_limit: null,  // Unlimited
     all_styles: true,
     custom_prompts: true,
-    byok: false,
+    byok: true,
     priority: true,
   },
 };
