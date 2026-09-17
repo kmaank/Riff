@@ -11,9 +11,10 @@ struct OnboardingView: View {
     @State private var micGranted = false
     @State private var testDriveBaseline = 0
     @State private var testDriveSucceeded = false
+    @State private var waitingForPayment = false
 
     private var paidManagedKey: Bool {
-        authManager.managedKeyAvailable || (authManager.isAuthenticated && authManager.subscriptionTier != "free" && !authManager.subscriptionTier.isEmpty)
+        authManager.isPaidPlan
     }
 
     var body: some View {
@@ -24,27 +25,36 @@ struct OnboardingView: View {
             } else if step == 2 {
                 accountStep
             } else if step == 3 {
-                apiKeyStep
+                planStep
             } else if step == 4 {
+                apiKeyStep
+            } else if step == 5 {
                 permissionsStep
             } else {
                 testDriveStep
             }
         }
         .padding()
-        .frame(minWidth: 640, minHeight: 480)
+        .frame(minWidth: 780, minHeight: 560)
         .background(Color(.windowBackgroundColor))
         .onAppear { advanceIfPossible() }
         .onChange(of: authManager.isAuthenticated) { authenticated in
-            if authenticated && step == 2 {
-                withAnimation { step = paidManagedKey ? 4 : 3 }
+            if authenticated && step <= 2 {
+                advanceAfterAccount()
+            }
+        }
+        .onChange(of: authManager.isPaidPlan) { paid in
+            if paid && (step == 3 || step == 4) {
+                waitingForPayment = false
+                authManager.clearPlanSelection()
+                withAnimation { step = 5 }
             }
         }
     }
 
     var progress: some View {
         HStack(spacing: 8) {
-            ForEach(1...5, id: \.self) { n in
+            ForEach(1...6, id: \.self) { n in
                 Circle()
                     .fill(n <= step ? Color.accentColor : Color.gray.opacity(0.25))
                     .frame(width: 8, height: 8)
@@ -60,7 +70,7 @@ struct OnboardingView: View {
                 .frame(width: 88, height: 88)
             Text("Welcome to Riff")
                 .font(.system(size: 28, weight: .bold))
-            Text("Create an account, grant permissions, and try a riff.\nTakes about a minute.")
+            Text("Create an account, pick a plan, then grant permissions from the next screens.\nTakes about a minute.")
                 .multilineTextAlignment(.center)
                 .foregroundColor(.secondary)
             Spacer()
@@ -83,6 +93,52 @@ struct OnboardingView: View {
             }
         }
         .padding(.horizontal)
+    }
+
+    var planStep: some View {
+        VStack(spacing: 12) {
+            SubscriptionView(
+                embedded: true,
+                onChoseFree: {
+                    waitingForPayment = false
+                    withAnimation { step = 4 }
+                },
+                onPaidCheckoutOpened: {
+                    waitingForPayment = true
+                }
+            )
+            .environmentObject(authManager)
+
+            if waitingForPayment {
+                Text("Finish checkout in your browser. This screen continues when payment completes.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                Button("Continue with Free instead") {
+                    waitingForPayment = false
+                    withAnimation { step = 4 }
+                }
+            }
+
+            HStack {
+                Button("Back") { withAnimation { step = 2 } }
+                Spacer()
+            }
+        }
+        .padding(.horizontal, 8)
+        .onReceive(Timer.publish(every: 3, on: .main, in: .common).autoconnect()) { _ in
+            guard waitingForPayment else { return }
+            Task {
+                try? await authManager.validateSubscription()
+                if authManager.isPaidPlan {
+                    await MainActor.run {
+                        waitingForPayment = false
+                        authManager.clearPlanSelection()
+                        withAnimation { step = 5 }
+                    }
+                }
+            }
+        }
     }
 
     var apiKeyStep: some View {
@@ -108,10 +164,12 @@ struct OnboardingView: View {
 
             Spacer()
             HStack {
-                Button("Back") { withAnimation { step = 2 } }
+                Button("Back") {
+                    withAnimation { step = authManager.needsPlanSelection ? 3 : 2 }
+                }
                 Button("Next") {
                     saveKey()
-                    withAnimation { step = 4 }
+                    withAnimation { step = 5 }
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!isKeyValid)
@@ -120,7 +178,7 @@ struct OnboardingView: View {
         .padding()
         .onAppear {
             if paidManagedKey {
-                withAnimation { step = 4 }
+                withAnimation { step = 5 }
             }
             apiKeyInput = settings.config.api.api_key
             isKeyValid = apiKeyInput.trimmingCharacters(in: .whitespaces).starts(with: "gsk_")
@@ -128,20 +186,20 @@ struct OnboardingView: View {
     }
 
     var permissionsStep: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 16) {
             Text("Grant Permissions")
                 .font(.title)
                 .fontWeight(.bold)
-            Text("Accessibility is required for the hotkey. Microphone is required to record.")
+            Text("Riff stays in the menu bar. This window is Settings — you can close it and reopen it from the tray.\nClick each button below. macOS asks only when you click.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
 
-            HStack(spacing: 16) {
+            HStack(spacing: 12) {
                 permissionCard(
                     title: "Accessibility",
                     granted: isAccessibilityTrusted(),
-                    actionTitle: "Open Settings",
-                    action: openAccessibilitySettings
+                    actionTitle: "Allow",
+                    action: promptAccessibility
                 )
                 permissionCard(
                     title: "Microphone",
@@ -151,15 +209,27 @@ struct OnboardingView: View {
                 )
             }
 
-            HStack {
-                Button("Open Input Monitoring") { openInputSettings() }
-                    .font(.caption)
+            HStack(spacing: 12) {
+                permissionCard(
+                    title: "Input Monitoring",
+                    granted: false,
+                    actionTitle: "Open Settings",
+                    action: openInputSettings
+                )
+                permissionCard(
+                    title: "Paste (Automation)",
+                    granted: false,
+                    actionTitle: "Allow Paste",
+                    action: promptAutomation
+                )
             }
 
             Spacer()
             HStack {
-                Button("Back") { withAnimation { step = paidManagedKey ? 2 : 3 } }
-                Button("Next") { withAnimation { step = 5 } }
+                Button("Back") {
+                    withAnimation { step = paidManagedKey ? (authManager.needsPlanSelection ? 3 : 2) : 4 }
+                }
+                Button("Next") { withAnimation { step = 6 } }
                     .buttonStyle(.borderedProminent)
                     .disabled(!isAccessibilityTrusted())
             }
@@ -210,7 +280,7 @@ struct OnboardingView: View {
 
             Spacer()
             HStack {
-                Button("Back") { withAnimation { step = 4 } }
+                Button("Back") { withAnimation { step = 5 } }
                 Button("Start Riffing") {
                     completeOnboarding()
                 }
@@ -224,7 +294,6 @@ struct OnboardingView: View {
         .padding()
         .onAppear {
             testDriveBaseline = settings.history.count
-            requestMic()
         }
         .onReceive(Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()) { _ in
             if settings.history.count > testDriveBaseline {
@@ -246,6 +315,17 @@ struct OnboardingView: View {
         newConfig.onboarding_completed = true
         settings.config = newConfig
         settings.saveConfig()
+        authManager.clearPlanSelection()
+    }
+
+    func advanceAfterAccount() {
+        if authManager.needsPlanSelection && !paidManagedKey {
+            withAnimation { step = 3 }
+        } else if paidManagedKey {
+            withAnimation { step = 5 }
+        } else {
+            withAnimation { step = 4 }
+        }
     }
 
     func advanceIfPossible() {
@@ -253,13 +333,30 @@ struct OnboardingView: View {
             step = settings.config.onboarding_completed == true ? 2 : 1
             return
         }
-        if !paidManagedKey && settings.config.api.api_key.isEmpty {
+        if authManager.needsPlanSelection && !paidManagedKey {
             step = 3
             return
         }
-        if !(settings.config.onboarding_completed ?? false) {
+        if !paidManagedKey && settings.config.api.api_key.isEmpty {
             step = 4
+            return
         }
+        if !(settings.config.onboarding_completed ?? false) {
+            step = 5
+        }
+    }
+
+    func promptAccessibility() {
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        AXIsProcessTrustedWithOptions(options)
+        openAccessibilitySettings()
+    }
+
+    func promptAutomation() {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        proc.arguments = ["-e", "tell application \"System Events\" to get name of first process"]
+        try? proc.run()
     }
 
     func openAccessibilitySettings() {

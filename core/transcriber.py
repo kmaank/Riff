@@ -27,12 +27,38 @@ class Transcriber:
             raise TranscriptionError("API key is required.")
         try:
             self.client = Groq(api_key=api_key, timeout=300.0)
+            self._api_key = api_key
             self.script_mode = script_mode
             self.max_file_size_mb = 25  # Groq limit
             self.chunk_duration_minutes = 10  # Safe chunk size (well under 13 min limit)
             logging.info(f"[Transcriber] Init: script_mode={script_mode}")
         except Exception as e:
             raise TranscriptionError(f"Failed to initialize Groq client: {e}")
+
+    def _is_silence(self, filepath: str, rms_threshold: float = 0.008) -> bool:
+        """Skip Groq when the clip is effectively silence so paid keys are not billed."""
+        try:
+            _rate, data = wavfile.read(filepath)
+            x = np.asarray(data, dtype=np.float32)
+            if x.ndim > 1:
+                x = x[:, 0]
+            if x.size == 0:
+                return True
+            peak = float(np.max(np.abs(x)))
+            if peak > 1.5:
+                x = x / 32768.0
+            rms = float(np.sqrt(np.mean(x ** 2)))
+            logging.info(f"[Transcriber] Audio RMS={rms:.5f} threshold={rms_threshold}")
+            return rms < rms_threshold
+        except Exception as e:
+            logging.warning(f"[Transcriber] Silence check failed, sending to Groq: {e}")
+            return False
+
+    def update_api_key(self, api_key: str):
+        if not api_key or api_key == getattr(self, "_api_key", None):
+            return
+        self._api_key = api_key
+        self.client = Groq(api_key=api_key, timeout=300.0)
         
     def _transcribe_chunked(self, filepath: str) -> str:
         """
@@ -233,6 +259,10 @@ class Transcriber:
         file_size_bytes = os.path.getsize(filepath)
         file_size_mb = file_size_bytes / (1024 * 1024)
         logging.info(f"[Transcriber] Request: {filepath} ({file_size_mb:.2f} MB)")
+
+        if self._is_silence(filepath):
+            logging.info("[Transcriber] Audio is silence/noise — skipping Groq")
+            return ""
 
         # If file is too large, split into chunks
         if file_size_mb > self.max_file_size_mb:

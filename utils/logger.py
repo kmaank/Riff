@@ -30,9 +30,8 @@ def setup_logging(log_dir=None):
     Returns the path to the log file.
     """
     if not log_dir:
-        # Default to standard Mac location for persistence, or Documents for user visibility
-        # User requested easy sharing, so Documents/Riff is good.
-        log_dir = os.path.expanduser("~/Documents/Riff")
+        # Application Support does not trigger a Documents-folder TCC prompt on launch.
+        log_dir = os.path.expanduser("~/Library/Application Support/Riff/logs")
     
     os.makedirs(log_dir, exist_ok=True)
     log_file = os.path.join(log_dir, "debug.log")
@@ -91,7 +90,8 @@ def log_activity(message: str):
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         # Determine log dir (same as debug)
-        log_dir = os.path.expanduser("~/Documents/Riff")
+        log_dir = os.path.expanduser("~/Library/Application Support/Riff/logs")
+        os.makedirs(log_dir, exist_ok=True)
         activity_file = os.path.join(log_dir, "activity.log")
         
         with open(activity_file, "a", encoding="utf-8") as f:

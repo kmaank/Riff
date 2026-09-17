@@ -183,7 +183,9 @@ struct AccountView: View {
     @ViewBuilder
     private var subscriptionActionButtons: some View {
         HStack(spacing: 12) {
-            if authManager.subscriptionTier == "free" || authManager.subscriptionTier == "starter" {
+            if authManager.subscriptionTier == "free"
+                || authManager.subscriptionTier == "monthly"
+                || authManager.subscriptionTier == "starter" {
                 Button(action: { showSubscriptionView = true }) {
                     HStack {
                         Image(systemName: "arrow.up.circle.fill")
@@ -274,6 +276,8 @@ struct AccountView: View {
     private func tierDisplayName() -> String {
         switch authManager.subscriptionTier {
         case "free": return "Free (BYOK)"
+        case "monthly": return "Monthly"
+        case "yearly": return "Yearly"
         case "starter": return "Starter"
         case "pro": return "Pro"
         case "lifetime": return "Lifetime"
@@ -295,8 +299,8 @@ struct AccountView: View {
     private func tierColor() -> Color {
         switch authManager.subscriptionTier {
         case "free": return .gray
-        case "starter": return .blue
-        case "pro": return .purple
+        case "monthly", "starter": return .blue
+        case "yearly", "pro": return .purple
         case "lifetime": return .orange
         default: return .gray
         }

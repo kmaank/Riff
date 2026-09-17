@@ -5,7 +5,7 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { getSupabaseClient, getSupabaseServiceClient, getStripeClient, getUserId, corsHeaders } from '../_shared/clients.ts';
 
 interface CheckoutRequest {
-  tier: 'starter' | 'pro' | 'lifetime';
+  tier: 'monthly' | 'yearly' | 'starter' | 'pro' | 'lifetime';
 }
 
 serve(async (req) => {
@@ -30,7 +30,7 @@ serve(async (req) => {
     // Parse request
     const body: CheckoutRequest = await req.json();
     
-    if (!['starter', 'pro', 'lifetime'].includes(body.tier)) {
+    if (!['monthly', 'yearly', 'starter', 'pro', 'lifetime'].includes(body.tier)) {
       return new Response(
         JSON.stringify({ error: 'Invalid tier' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -68,7 +68,9 @@ serve(async (req) => {
     }
 
     // Get price IDs from environment
-    const priceIds = {
+    const priceIds: Record<string, string | undefined> = {
+      monthly: Deno.env.get('STRIPE_MONTHLY_PRICE_ID') || Deno.env.get('STRIPE_STARTER_PRICE_ID') || Deno.env.get('STRIPE_PRICE_ID_STARTER'),
+      yearly: Deno.env.get('STRIPE_YEARLY_PRICE_ID') || Deno.env.get('STRIPE_PRO_PRICE_ID') || Deno.env.get('STRIPE_PRICE_ID_PRO'),
       starter: Deno.env.get('STRIPE_STARTER_PRICE_ID') || Deno.env.get('STRIPE_PRICE_ID_STARTER'),
       pro: Deno.env.get('STRIPE_PRO_PRICE_ID') || Deno.env.get('STRIPE_PRICE_ID_PRO'),
       lifetime: Deno.env.get('STRIPE_LIFETIME_PRICE_ID') || Deno.env.get('STRIPE_PRICE_ID_LIFETIME'),

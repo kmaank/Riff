@@ -28,11 +28,19 @@ class SwiftAuthManager: ObservableObject {
     @Published var memberSince: String = ""
     @Published var googleOAuthEnabled: Bool = false
     @Published var managedKeyAvailable: Bool = false
+    /// True after a new signup until the user picks Free / Monthly / Yearly.
+    /// Returning logins never set this, so they skip the paywall.
+    @Published var needsPlanSelection: Bool = false
 
     let supabaseUrl: String
     let supabaseAnonKey: String
     private let authStatePath: URL
     private let riffDir: URL
+    private static let planSelectionKey = "riff_needs_plan_selection"
+
+    var isPaidPlan: Bool {
+        managedKeyAvailable || (subscriptionTier != "free" && !subscriptionTier.isEmpty)
+    }
 
     /// Whether the Supabase credentials are real (not placeholder defaults)
     var hasValidCredentials: Bool {
@@ -48,7 +56,7 @@ class SwiftAuthManager: ObservableObject {
 
         // Load config to get Supabase credentials
         var url = "https://yrsviodciuepunofxoja.supabase.co"
-        var key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inlyc3Zpb2RjaXVlcHVub2Z4b2phIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Mzk1OTY1ODksImV4cCI6MjA1NTE3MjU4OX0.7f_q_xbFZNOB3Gqk-PL78gQ2jEZ_CivfCk1n_JJsMbE"
+        var key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inlyc3Zpb2RjaXVlcHVub2Z4b2phIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwOTk0MTIsImV4cCI6MjA4NzY3NTQxMn0.GBYQIn6A6TmcHjL75m8bTNbPXe2zCGH28jrxrOhnmo8"
         var googleEnabled = false
 
         AuthLogger.log("Loading config from: \(configPath.path)")
@@ -80,6 +88,8 @@ class SwiftAuthManager: ObservableObject {
 
         // Load cached auth state
         loadCachedState()
+        exportSessionFromUserDefaults()
+        needsPlanSelection = UserDefaults.standard.bool(forKey: Self.planSelectionKey)
         startAuthStateMonitor()
         AuthLogger.log("SwiftAuthManager initialized. isAuthenticated=\(isAuthenticated), email=\(userEmail)")
         runStartupConnectivityCheck()
@@ -223,6 +233,7 @@ class SwiftAuthManager: ObservableObject {
 
                 writeAuthState(authenticated: true, email: result.user.email, userId: result.user.id)
                 storeTokens(accessToken: result.accessToken, refreshToken: result.refreshToken)
+                clearPlanSelection()
                 logLoginEvent(method: "email_signin", success: true)
                 fetchProfile()
             } else {
@@ -348,15 +359,25 @@ class SwiftAuthManager: ObservableObject {
 
                     writeAuthState(authenticated: true, email: result.user.email, userId: result.user.id)
                     storeTokens(accessToken: result.accessToken, refreshToken: result.refreshToken)
+                    markJustSignedUp()
                     logLoginEvent(method: "email_signup", success: true)
                     fetchProfile()
                 } else {
                     let responseBody = String(data: data, encoding: .utf8) ?? "<non-utf8>"
-                    AuthLogger.log("Signup OK but email confirmation required. Response: \(responseBody)")
+                    let alreadyRegistered = Self.isObfuscatedExistingUser(data)
+                    AuthLogger.log("Signup OK without session. alreadyRegistered=\(alreadyRegistered) Response: \(responseBody)")
 
-                    await MainActor.run {
-                        self.isLoading = false
-                        self.errorMessage = "Check your email! We sent a confirmation link to \(email)."
+                    if alreadyRegistered {
+                        await MainActor.run {
+                            self.isLoading = false
+                            self.errorMessage = "This email already has an account. Sign in instead. If you forgot the password, tap Forgot password."
+                        }
+                    } else {
+                        markJustSignedUp()
+                        await MainActor.run {
+                            self.isLoading = false
+                            self.errorMessage = "Check your email! We sent a confirmation link to \(email)."
+                        }
                     }
                 }
             } else {
@@ -530,6 +551,10 @@ class SwiftAuthManager: ObservableObject {
                 }
 
                 writeAuthState(authenticated: true, email: email, userId: userId)
+                if url.host != "oauth" {
+                    // Email confirmation finishes signup — still prompt for a plan.
+                    markJustSignedUp()
+                }
                 logLoginEvent(method: url.host == "oauth" ? "oauth_google" : "email_confirm", success: true)
                 fetchProfile()
             } else {
@@ -537,6 +562,76 @@ class SwiftAuthManager: ObservableObject {
             }
         } else {
             AuthLogger.log("ERROR: Auth callback missing access_token or refresh_token")
+        }
+    }
+
+    func markJustSignedUp() {
+        DispatchQueue.main.async {
+            self.needsPlanSelection = true
+        }
+        UserDefaults.standard.set(true, forKey: Self.planSelectionKey)
+        AuthLogger.log("Marked as new signup — will prompt for plan")
+    }
+
+    func clearPlanSelection() {
+        DispatchQueue.main.async {
+            self.needsPlanSelection = false
+        }
+        UserDefaults.standard.set(false, forKey: Self.planSelectionKey)
+    }
+
+    /// GoTrue returns a fake 200 user with empty identities for repeated signup
+    /// so attackers cannot enumerate emails. No confirmation mail is sent.
+    private static func isObfuscatedExistingUser(_ data: Data) -> Bool {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return false
+        }
+        let identities = json["identities"] as? [Any] ?? []
+        let accessToken = json["access_token"] as? String ?? ""
+        return identities.isEmpty && accessToken.isEmpty
+    }
+
+    func sendPasswordReset(email: String) async {
+        AuthLogger.log("sendPasswordReset called for: \(email)")
+        await MainActor.run {
+            self.isLoading = true
+            self.errorMessage = nil
+        }
+
+        var endpoint = "\(supabaseUrl)/auth/v1/recover"
+        if var components = URLComponents(string: endpoint) {
+            components.queryItems = [URLQueryItem(name: "redirect_to", value: "riff://auth/callback")]
+            endpoint = components.url?.absoluteString ?? endpoint
+        }
+        guard let url = URL(string: endpoint) else {
+            await MainActor.run {
+                self.isLoading = false
+                self.errorMessage = "Something went wrong. Please try again."
+            }
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(supabaseAnonKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["email": email])
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            AuthLogger.log("Password reset response status: \(status)")
+            await MainActor.run {
+                self.isLoading = false
+                self.errorMessage = "If an account exists for \(email), we sent a reset link. Check inbox and spam."
+            }
+        } catch {
+            AuthLogger.log("Password reset failed: \(error.localizedDescription)")
+            await MainActor.run {
+                self.isLoading = false
+                self.errorMessage = "Could not send reset email. Please try again."
+            }
         }
     }
 
@@ -549,28 +644,13 @@ class SwiftAuthManager: ObservableObject {
         subscriptionTier = "free"
         quota = nil
 
-        // Clear stored tokens from Keychain
-        deleteFromKeychain(service: "riff", account: "supabase_access_token")
-        deleteFromKeychain(service: "riff", account: "supabase_refresh_token")
-        deleteFromKeychain(service: "riff", account: "managed_groq_key")
-
-        // Clear from UserDefaults
         UserDefaults.standard.removeObject(forKey: "supabase_access_token")
         UserDefaults.standard.removeObject(forKey: "supabase_refresh_token")
+        try? FileManager.default.removeItem(at: sessionPath)
 
-        // Write auth state for Python
         writeAuthState(authenticated: false, email: "", userId: "")
         logLoginEvent(method: "sign_out", success: true)
         AuthLogger.log("Sign out complete — tokens cleared, auth state written")
-    }
-
-    private func deleteFromKeychain(service: String, account: String) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account
-        ]
-        SecItemDelete(query as CFDictionary)
     }
 
     // MARK: - Subscription Methods
@@ -578,14 +658,7 @@ class SwiftAuthManager: ObservableObject {
     func validateSubscription() async throws {
         AuthLogger.log("validateSubscription called")
 
-        // Try UserDefaults first, then Keychain
-        var accessToken = UserDefaults.standard.string(forKey: "supabase_access_token")
-        if accessToken == nil {
-            AuthLogger.log("No token in UserDefaults, checking Keychain...")
-            accessToken = getFromKeychain(service: "riff", account: "supabase_access_token")
-        }
-
-        guard let token = accessToken else {
+        guard let token = currentAccessToken() else {
             AuthLogger.log("ERROR: No access token available for subscription validation")
             throw AuthError.notAuthenticated
         }
@@ -627,9 +700,7 @@ class SwiftAuthManager: ObservableObject {
     }
 
     func refreshSessionIfNeeded() async {
-        guard let token = UserDefaults.standard.string(forKey: "supabase_refresh_token")
-            ?? getFromKeychain(service: "riff", account: "supabase_refresh_token"),
-              !token.isEmpty else { return }
+        guard let token = currentRefreshToken(), !token.isEmpty else { return }
 
         guard let url = URL(string: "\(supabaseUrl)/auth/v1/token?grant_type=refresh_token") else { return }
         var request = URLRequest(url: url)
@@ -662,9 +733,7 @@ class SwiftAuthManager: ObservableObject {
     }
 
     func fetchProfile() {
-        guard let token = UserDefaults.standard.string(forKey: "supabase_access_token")
-            ?? getFromKeychain(service: "riff", account: "supabase_access_token"),
-              !token.isEmpty else { return }
+        guard let token = currentAccessToken(), !token.isEmpty else { return }
         guard !userId.isEmpty else { return }
         guard let url = URL(string: "\(supabaseUrl)/rest/v1/profiles?select=email,created_at&id=eq.\(userId)") else { return }
 
@@ -692,9 +761,7 @@ class SwiftAuthManager: ObservableObject {
     }
 
     func logLoginEvent(method: String, success: Bool, error: String? = nil) {
-        guard let token = UserDefaults.standard.string(forKey: "supabase_access_token")
-            ?? getFromKeychain(service: "riff", account: "supabase_access_token"),
-              !token.isEmpty else { return }
+        guard let token = currentAccessToken(), !token.isEmpty else { return }
         guard let url = URL(string: "\(supabaseUrl)/rest/v1/login_events") else { return }
 
         var request = URLRequest(url: url)
@@ -717,11 +784,15 @@ class SwiftAuthManager: ObservableObject {
 
     // MARK: - IPC with Python
 
-    private func loadCachedState() {
-        AuthLogger.log("Loading cached auth state from: \(authStatePath.path)")
+    private func loadCachedState(quietIfMissing: Bool = false) {
+        if !quietIfMissing {
+            AuthLogger.log("Loading cached auth state from: \(authStatePath.path)")
+        }
 
         guard FileManager.default.fileExists(atPath: authStatePath.path) else {
-            AuthLogger.log("No auth_state.json found — starting unauthenticated")
+            if !quietIfMissing {
+                AuthLogger.log("No auth_state.json found — starting unauthenticated")
+            }
             return
         }
 
@@ -764,71 +835,64 @@ class SwiftAuthManager: ObservableObject {
     private func startAuthStateMonitor() {
         // Poll auth_state.json every 2 seconds for changes from Python
         Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
-            self.loadCachedState()
+            self.loadCachedState(quietIfMissing: true)
         }
     }
 
     // MARK: - Token Management
 
+    private var sessionPath: URL { riffDir.appendingPathComponent("session.json") }
+
+    private func currentAccessToken() -> String? {
+        if let token = UserDefaults.standard.string(forKey: "supabase_access_token"), !token.isEmpty {
+            return token
+        }
+        return readSession()["access_token"]
+    }
+
+    private func currentRefreshToken() -> String? {
+        if let token = UserDefaults.standard.string(forKey: "supabase_refresh_token"), !token.isEmpty {
+            return token
+        }
+        return readSession()["refresh_token"]
+    }
+
+    private func readSession() -> [String: String] {
+        guard let data = try? Data(contentsOf: sessionPath),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return [:]
+        }
+        var out: [String: String] = [:]
+        for (key, value) in obj {
+            if let s = value as? String { out[key] = s }
+        }
+        return out
+    }
+
+    private func writeSession(accessToken: String, refreshToken: String) {
+        try? FileManager.default.createDirectory(at: riffDir, withIntermediateDirectories: true)
+        var payload = readSession()
+        payload["access_token"] = accessToken
+        payload["refresh_token"] = refreshToken
+        if let data = try? JSONSerialization.data(withJSONObject: payload) {
+            try? data.write(to: sessionPath, options: .atomic)
+        }
+    }
+
+    private func exportSessionFromUserDefaults() {
+        if let access = UserDefaults.standard.string(forKey: "supabase_access_token"),
+           let refresh = UserDefaults.standard.string(forKey: "supabase_refresh_token"),
+           !access.isEmpty, !refresh.isEmpty {
+            writeSession(accessToken: access, refreshToken: refresh)
+        }
+    }
+
     private func storeTokens(accessToken: String, refreshToken: String) {
         AuthLogger.log("Storing tokens (access: \(accessToken.prefix(10))..., refresh: \(refreshToken.prefix(10))...)")
-
-        // Store in Keychain for Python backend compatibility
-        storeInKeychain(service: "riff", account: "supabase_access_token", value: accessToken)
-        storeInKeychain(service: "riff", account: "supabase_refresh_token", value: refreshToken)
-
-        // Also store in UserDefaults for Swift UI
         UserDefaults.standard.set(accessToken, forKey: "supabase_access_token")
         UserDefaults.standard.set(refreshToken, forKey: "supabase_refresh_token")
-
-        AuthLogger.log("Tokens stored in Keychain + UserDefaults")
-    }
-
-    private func storeInKeychain(service: String, account: String, value: String) {
-        let data = value.data(using: .utf8)!
-
-        // Delete existing item first
-        let deleteQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account
-        ]
-        SecItemDelete(deleteQuery as CFDictionary)
-
-        // Add new item
-        let addQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecValueData as String: data
-        ]
-
-        let status = SecItemAdd(addQuery as CFDictionary, nil)
-        if status != errSecSuccess {
-            AuthLogger.log("ERROR: Keychain store failed for \(account): OSStatus \(status)")
-        } else {
-            AuthLogger.log("Keychain store success for \(account)")
-        }
-    }
-
-    private func getFromKeychain(service: String, account: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true
-        ]
-
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-
-        guard status == errSecSuccess,
-              let data = result as? Data,
-              let value = String(data: data, encoding: .utf8) else {
-            return nil
-        }
-
-        return value
+        writeSession(accessToken: accessToken, refreshToken: refreshToken)
+        AuthLogger.log("Tokens stored in UserDefaults + session.json")
     }
 
     private func decodeJWT(token: String) -> [String: Any]? {
@@ -955,12 +1019,11 @@ enum AuthError: LocalizedError {
 }
 
 // MARK: - Auth Debug Logger
-/// Centralized logger for auth operations — writes to ~/Documents/Riff/debug_auth.log
-/// (same directory as Python's debug.log and activity.log)
+/// Centralized logger for auth operations — writes to Application Support (not Documents).
 struct AuthLogger {
     static let logDir: URL = {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        return home.appendingPathComponent("Documents/Riff")
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return appSupport.appendingPathComponent("Riff/logs")
     }()
 
     static let logFile: URL = {

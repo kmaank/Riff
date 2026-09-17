@@ -75,6 +75,8 @@ export function getManagedGroqKey(tier: string): string | null {
     starter: Deno.env.get('GROQ_API_KEY_STARTER'),
     pro: Deno.env.get('GROQ_API_KEY_PRO'),
     lifetime: Deno.env.get('GROQ_API_KEY_LIFETIME'),
+    monthly: Deno.env.get('GROQ_API_KEY_MONTHLY') || Deno.env.get('GROQ_API_KEY'),
+    yearly: Deno.env.get('GROQ_API_KEY_YEARLY') || Deno.env.get('GROQ_API_KEY'),
   };
   return (
     perTier[tier] ||

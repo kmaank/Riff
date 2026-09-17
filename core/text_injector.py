@@ -4,6 +4,7 @@ import pyperclip
 import time
 import platform
 import subprocess
+import threading
 
 class TextInjector:
     def __init__(self, use_clipboard=True):
@@ -12,26 +13,29 @@ class TextInjector:
         self.is_mac = platform.system() == "Darwin"
         logging.info(f"[Injector] Init: Clipboard={use_clipboard}, OS={platform.system()}")
 
-    def inject(self, text: str):
+    def inject(self, text: str) -> bool:
         if not text:
-            return
+            return False
 
         logging.info(f"[Injector] Inserting {len(text)} chars...")
 
-        # For very long text (>5000 chars), use chunked pasting to avoid app limits
-        if len(text) > 5000:
-            logging.info("[Injector] Strategy: Chunked Clipboard Paste (text > 5000 chars)")
-            self.inject_via_chunked_clipboard(text)
-        # Use clipboard for long text or if forced
-        # "Race to the Paste" Fix: Raised threshold to 300 to prefer typing
-        elif self.use_clipboard or len(text) > 300:
-            logging.info("[Injector] Strategy: Clipboard Paste")
-            self.inject_via_clipboard(text)
-        else:
-            logging.info("[Injector] Strategy: Direct Typing")
-            self.type_text(text)
+        try:
+            if len(text) > 5000:
+                logging.info("[Injector] Strategy: Chunked Clipboard Paste (text > 5000 chars)")
+                ok = self.inject_via_chunked_clipboard(text)
+            elif self.use_clipboard or len(text) > 300:
+                logging.info("[Injector] Strategy: Clipboard Paste")
+                ok = self.inject_via_clipboard(text)
+            else:
+                logging.info("[Injector] Strategy: Direct Typing")
+                self.type_text(text)
+                ok = True
+        except Exception as e:
+            logging.error(f"[Injector] Failed: {e}", exc_info=True)
+            return False
 
-        logging.info("[Injector] Done")
+        logging.info(f"[Injector] Done success={ok}")
+        return ok
 
     def type_text(self, text: str):
         # Type character by character
@@ -59,66 +63,69 @@ class TextInjector:
         for i, chunk in enumerate(chunks):
             logging.info(f"[Injector] Pasting chunk {i+1}/{total_chunks} ({len(chunk)} chars)...")
 
-            # Copy chunk to clipboard
             pyperclip.copy(chunk)
-            time.sleep(0.15)  # Longer delay for clipboard update
+            time.sleep(0.15)
 
-            # Paste chunk
-            self._do_paste()
+            if not self._do_paste():
+                logging.error(f"[Injector] Chunk {i+1}/{total_chunks} paste failed")
+                return False
 
-            # Delay between chunks to let app process
-            if i < total_chunks - 1:  # Not the last chunk
-                time.sleep(0.3)  # Give app time to process before next chunk
+            if i < total_chunks - 1:
+                time.sleep(0.3)
 
-        # Restore clipboard after final chunk
-        time.sleep(0.8)
-        try:
-            pyperclip.copy(old_clipboard)
-        except:
-            pass
+        def restore():
+            time.sleep(0.8)
+            try:
+                pyperclip.copy(old_clipboard)
+            except Exception:
+                pass
 
+        threading.Thread(target=restore, daemon=True, name="riff-clipboard-restore").start()
         logging.info(f"[Injector] Chunked paste complete: {total_chunks} chunks pasted")
+        return True
 
-    def _do_paste(self):
+    def _do_paste(self) -> bool:
         """Helper method to perform a single paste operation."""
         if self.is_mac:
             try:
                 subprocess.run(["osascript", "-e", 'tell application "System Events" to keystroke "v" using command down'], check=True)
+                return True
             except Exception as e:
                 logging.warning(f"[Injector] AppleScript paste failed: {e}")
-                # Fallback to pynput
                 try:
                     with self.keyboard.pressed(Key.cmd):
                         self.keyboard.press('v')
                         self.keyboard.release('v')
+                    return True
                 except Exception as ex:
                     logging.error(f"[Injector] Pynput paste failed: {ex}")
+                    return False
         else:
             with self.keyboard.pressed(Key.ctrl):
                 self.keyboard.press('v')
                 self.keyboard.release('v')
+            return True
 
-    def inject_via_clipboard(self, text: str):
-        # Save current clipboard
+    def inject_via_clipboard(self, text: str) -> bool:
         try:
             old_clipboard = pyperclip.paste()
-        except:
+        except Exception:
             old_clipboard = ""
 
-        # Copy to clipboard
         pyperclip.copy(text)
-        time.sleep(0.1) # Wait for clipboard to update
+        time.sleep(0.1)
 
-        # Simulate paste (Cmd+V or Ctrl+V)
-        self._do_paste()
+        pasted = self._do_paste()
 
-        # Restore clipboard after a moment
-        # "Race to the Paste" Fix: Increased buffer to 0.8s
-        time.sleep(0.8)
-        try:
-            pyperclip.copy(old_clipboard)
-        except:
-            pass
+        def restore():
+            time.sleep(0.8)
+            try:
+                pyperclip.copy(old_clipboard)
+            except Exception:
+                pass
+
+        threading.Thread(target=restore, daemon=True, name="riff-clipboard-restore").start()
+        return pasted
 
 def main():
     injector = TextInjector()

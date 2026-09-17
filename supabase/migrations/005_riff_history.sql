@@ -6,7 +6,7 @@
 CREATE TABLE IF NOT EXISTS public.riff_history (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-    timestamp TEXT NOT NULL,  -- ISO timestamp string (matches client format)
+    "timestamp" TEXT NOT NULL,  -- ISO timestamp string (matches client format)
     original TEXT NOT NULL,
     refined TEXT NOT NULL,
     style TEXT NOT NULL,
@@ -15,12 +15,12 @@ CREATE TABLE IF NOT EXISTS public.riff_history (
     created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
 
     -- Constraints
-    UNIQUE(user_id, timestamp)  -- Prevent duplicate entries
+    UNIQUE(user_id, "timestamp")  -- Prevent duplicate entries
 );
 
 -- Add indexes for performance
 CREATE INDEX IF NOT EXISTS idx_riff_history_user_id ON public.riff_history(user_id);
-CREATE INDEX IF NOT EXISTS idx_riff_history_user_timestamp ON public.riff_history(user_id, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_riff_history_user_timestamp ON public.riff_history(user_id, "timestamp" DESC);
 CREATE INDEX IF NOT EXISTS idx_riff_history_created_at ON public.riff_history(created_at DESC);
 
 -- Enable Row-Level Security
@@ -58,7 +58,7 @@ CREATE OR REPLACE FUNCTION public.get_user_history(
 )
 RETURNS TABLE (
     id UUID,
-    timestamp TEXT,
+    "timestamp" TEXT,
     original TEXT,
     refined TEXT,
     style TEXT,
@@ -73,7 +73,7 @@ BEGIN
     RETURN QUERY
     SELECT
         h.id,
-        h.timestamp,
+        h."timestamp",
         h.original,
         h.refined,
         h.style,
@@ -81,7 +81,7 @@ BEGIN
         h.device_id
     FROM public.riff_history h
     WHERE h.user_id = p_user_id
-    ORDER BY h.timestamp DESC
+    ORDER BY h."timestamp" DESC
     LIMIT LEAST(p_limit, 1000)  -- Max 1000 entries
     OFFSET p_offset;
 END;
@@ -112,7 +112,7 @@ BEGIN
     ) VALUES (
         p_user_id, p_timestamp, p_original, p_refined, p_style, p_script_mode, p_device_id
     )
-    ON CONFLICT (user_id, timestamp)
+    ON CONFLICT (user_id, "timestamp")
     DO UPDATE SET
         original = EXCLUDED.original,
         refined = EXCLUDED.refined,
@@ -131,7 +131,7 @@ BEGIN
         WHERE id IN (
             SELECT id FROM public.riff_history
             WHERE user_id = p_user_id
-            ORDER BY timestamp ASC
+            ORDER BY "timestamp" ASC
             LIMIT (history_count - 1000)
         );
     END IF;
@@ -161,7 +161,7 @@ BEGIN
     FOR entry IN SELECT * FROM jsonb_array_elements(p_entries)
     LOOP
         INSERT INTO public.riff_history (
-            user_id, timestamp, original, refined, style, script_mode, device_id
+            user_id, "timestamp", original, refined, style, script_mode, device_id
         ) VALUES (
             p_user_id,
             entry->>'timestamp',
@@ -171,7 +171,7 @@ BEGIN
             entry->>'script_mode',
             entry->>'device_id'
         )
-        ON CONFLICT (user_id, timestamp) DO NOTHING;
+        ON CONFLICT (user_id, "timestamp") DO NOTHING;
 
         uploaded_count := uploaded_count + 1;
     END LOOP;
@@ -181,7 +181,7 @@ BEGIN
     WHERE id IN (
         SELECT id FROM public.riff_history
         WHERE user_id = p_user_id
-        ORDER BY timestamp ASC
+        ORDER BY "timestamp" ASC
         OFFSET 1000
     );
 

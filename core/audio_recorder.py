@@ -1,4 +1,3 @@
-import sounddevice as sd
 import numpy as np
 from scipy.io import wavfile
 import threading
@@ -27,11 +26,12 @@ class AudioRecorder:
         self.energy_threshold = energy_threshold
         self.silence_start_time = None
         self.on_auto_stop = None
-        
-        # Audio device configuration
-        sd.default.samplerate = self.sample_rate
-        sd.default.channels = self.channels
         logging.info(f"[AudioRecorder] Init: {sample_rate}Hz, {channels}ch, VAD Thresh={energy_threshold}")
+
+    def _sounddevice(self):
+        """Import PortAudio only when recording so launch does not prompt for the mic."""
+        import sounddevice as sd
+        return sd
 
     def calculate_energy(self, audio_chunk):
         """Calculate RMS energy of audio chunk."""
@@ -93,7 +93,9 @@ class AudioRecorder:
                 self.silence_start_time = None
                 self.on_auto_stop = on_auto_stop
                 
-                # Create and start stream
+                sd = self._sounddevice()
+                sd.default.samplerate = self.sample_rate
+                sd.default.channels = self.channels
                 self.stream = sd.InputStream(
                     samplerate=self.sample_rate,
                     channels=self.channels,

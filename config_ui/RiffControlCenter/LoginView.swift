@@ -18,7 +18,7 @@ struct LoginView: View {
                     .font(compact ? .title2 : .largeTitle)
                     .fontWeight(.bold)
 
-                Text(isSignUp ? "Required to use Riff" : "Use the email you signed up with")
+                Text(isSignUp ? "Next you'll choose Free, Monthly, or Yearly" : "Use the email you signed up with")
                     .foregroundStyle(.secondary)
                     .font(compact ? .subheadline : .body)
             }
@@ -46,6 +46,8 @@ struct LoginView: View {
 
                 if let message = authManager.errorMessage {
                     let isInfo = message.starts(with: "Check your email")
+                        || message.starts(with: "This email already")
+                        || message.starts(with: "If an account exists")
                     HStack(alignment: .top) {
                         Image(systemName: isInfo ? "envelope.circle.fill" : "exclamationmark.triangle.fill")
                             .foregroundColor(isInfo ? .green : .red)
@@ -75,6 +77,15 @@ struct LoginView: View {
                 }
                 .disabled(email.isEmpty || password.isEmpty || authManager.isLoading)
                 .opacity((email.isEmpty || password.isEmpty || authManager.isLoading) ? 0.6 : 1.0)
+
+                if !isSignUp {
+                    Button("Forgot password?") {
+                        Task { await authManager.sendPasswordReset(email: email) }
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(.blue)
+                    .disabled(email.isEmpty || authManager.isLoading)
+                }
 
                 Button(action: {
                     isSignUp.toggle()
@@ -123,6 +134,9 @@ struct LoginView: View {
             do {
                 if isSignUp {
                     try await authManager.signUpWithEmail(email: email, password: password)
+                    if let message = authManager.errorMessage, message.starts(with: "This email already") {
+                        await MainActor.run { isSignUp = false }
+                    }
                 } else {
                     try await authManager.signInWithEmail(email: email, password: password)
                 }

@@ -8,8 +8,8 @@ struct ContentView: View {
     var body: some View {
         let onboardingDone = settings.config.onboarding_completed ?? false
         let hasKey = !settings.config.api.api_key.isEmpty
-        let paid = authManager.managedKeyAvailable || (authManager.subscriptionTier != "free" && authManager.subscriptionTier != "")
-        let needsSetup = !onboardingDone || !authManager.isAuthenticated || (!hasKey && !paid)
+        let paid = authManager.isPaidPlan
+        let needsSetup = !onboardingDone || !authManager.isAuthenticated || (!hasKey && !paid) || (authManager.needsPlanSelection && !paid)
 
         if needsSetup {
             OnboardingView()

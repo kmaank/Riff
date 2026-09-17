@@ -8,6 +8,7 @@ import subprocess
 import queue
 import sys
 import stat
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from pynput import keyboard
@@ -26,6 +27,7 @@ from utils.permissions import PermissionManager
 # Phase 2: Authentication
 try:
     from utils.auth_manager import AuthManager
+    from utils.subscription_config import get_tier_features
     AUTH_AVAILABLE = True
 except ImportError:
     AUTH_AVAILABLE = False
@@ -80,10 +82,14 @@ class HistoryManager:
             
             history.insert(0, entry)
             history = history[:50]
-            
-            with open(self.history_file, 'w') as f:
+
+            tmp_path = self.history_file + ".tmp"
+            with open(tmp_path, 'w') as f:
                 json.dump(history, f, indent=2)
-                
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, self.history_file)
+
             logging.info(f"History entry added: {style}, script_mode: {script_mode}")
             return entry
         except Exception as e:
@@ -127,6 +133,11 @@ class ProcessingThread(threading.Thread):
         if not self.injector:
             self.injector = TextInjector()
 
+        # Local file writes are serialized; cloud uploads can overlap across riffs.
+        self._persist_lock = threading.Lock()
+        self._persist_shutdown = False
+        self._persist_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="riff-persist")
+
     def run(self):
         logging.info("Processing thread started")
         while True:
@@ -155,6 +166,18 @@ class ProcessingThread(threading.Thread):
                     
                 self.audio_queue.task_done()
 
+    def _ensure_clients(self, api_key: str):
+        """Create or refresh Groq clients so paid leases work without a BYOK key."""
+        script_mode = self.config_manager.get("script_mode.active_mode", "english_mixed")
+        if self.transcriber:
+            self.transcriber.update_api_key(api_key)
+        else:
+            self.transcriber = Transcriber(api_key, script_mode=script_mode)
+        if self.refiner:
+            self.refiner.update_api_key(api_key)
+        else:
+            self.refiner = Refiner(api_key, model=self.config_manager.get("api.llm_model"))
+
     def _process_audio_file(self, audio_path):
         """Process a single audio file through the pipeline."""
 
@@ -165,11 +188,25 @@ class ProcessingThread(threading.Thread):
                 logging.warning(f"Riff blocked by quota: {reason}")
                 self.notification_callback("Limit Reached", reason)
                 return
+            paid_key = self.auth_manager.get_effective_api_key()
+            if paid_key:
+                self._ensure_clients(paid_key)
 
         # Guard: API key may not be configured yet (first run)
         if not self.transcriber:
             logging.warning("Transcriber not initialized — API key missing")
-            self.notification_callback("Setup Required", "Please set your Groq API key in Settings")
+            paid = False
+            if AUTH_AVAILABLE and self.auth_manager:
+                try:
+                    paid = not get_tier_features(self.auth_manager.get_tier()).byok
+                except Exception:
+                    paid = False
+            self.notification_callback(
+                "Setup Required",
+                "Could not load your Riff key. Check your connection and try again."
+                if paid
+                else "Please set your Groq API key in Settings",
+            )
             return
 
         # Calculate duration for watchdog
@@ -241,53 +278,97 @@ class ProcessingThread(threading.Thread):
             logging.error(f"Refinement failed, falling back to raw text: {e}")
             refined_text = raw_text
             used_fallback = True
+        if used_fallback:
             self.notification_callback("Refinement Failed", "Using raw transcript")
 
-        # 4. Save History
-        script_mode = self.transcriber.script_mode if self.transcriber else "unknown"
-        entry = self.history_manager.add_entry(raw_text, refined_text, style, script_mode)
-        if self.auth_manager and entry:
-            try:
-                self.auth_manager.upload_history_entry(
-                    entry["timestamp"], raw_text, refined_text, style, script_mode
-                )
-            except Exception as e:
-                logging.warning(f"[Auth] History upload error: {e}")
+        # Paste immediately so the next riff can start. Persist only after a successful paste.
+        pasted = self.injector.inject(refined_text)
+        if not pasted:
+            logging.error("Paste failed — skipping history, metrics, and cloud sync")
+            self.notification_callback("Paste Failed", "Text was not inserted")
+            return
 
-        # 5. Update Metrics
-        word_count = len(refined_text.split())
-        self.config_manager.update_metrics(word_count, duration_sec, style)
-        logging.info(f"[Metrics] Updated: +{word_count} words, +{duration_sec:.1f}s, style={style}")
+        persist_job = {
+            "raw_text": raw_text,
+            "refined_text": refined_text,
+            "style": style,
+            "script_mode": self.transcriber.script_mode if self.transcriber else "unknown",
+            "duration_sec": duration_sec,
+            "word_count": len(refined_text.split()),
+        }
+        self._queue_persist(persist_job)
 
-        # Phase 2: Log usage to backend
-        if self.auth_manager:
-            try:
-                self.auth_manager.log_usage(
-                    word_count,
-                    duration_sec,
-                    style,
-                    script_mode
-                )
-                self.auth_manager.sync_user_settings(
-                    self.config_manager.get("hotkey.combination", "ctrl_l"),
-                    style,
-                    script_mode,
-                    bool(self.config_manager.get("onboarding_completed")),
-                )
-                logging.info("[Auth] Usage logged to backend")
-            except Exception as e:
-                logging.warning(f"[Auth] Usage logging error (non-fatal): {e}")
-
-        # 6. Type/Inject
-        self.injector.inject(refined_text)
-
-        # 7. Notify
         if used_fallback:
             self.notification_callback("Riff Complete", "Converted (Raw Fallback)")
             log_activity(f"Success: Transcribed & Pasted (Raw Fallback). Text length: {len(refined_text)}")
         else:
             self.notification_callback("Riff Complete", f"Converted ({style})")
             log_activity(f"Success: Transcribed & Pasted (Style: {style}). Text length: {len(refined_text)}")
+
+    def _queue_persist(self, job: dict):
+        """Run persist in the background unless we are already quitting."""
+        with self._persist_lock:
+            shutting_down = self._persist_shutdown
+        if shutting_down:
+            logging.info("[Persist] App quitting — saving synchronously")
+            self._persist_after_paste(job)
+            return
+        try:
+            self._persist_pool.submit(self._persist_after_paste, job)
+            logging.info("[Persist] Queued history/metrics/usage sync in background")
+        except RuntimeError:
+            logging.info("[Persist] Pool closed — saving synchronously")
+            self._persist_after_paste(job)
+
+    def _persist_after_paste(self, job: dict):
+        """Save local + cloud data after a successful paste. Safe to overlap with the next riff."""
+        raw_text = job["raw_text"]
+        refined_text = job["refined_text"]
+        style = job["style"]
+        script_mode = job["script_mode"]
+        duration_sec = job["duration_sec"]
+        word_count = job["word_count"]
+
+        logging.info(f"[Persist] Starting background save ({word_count} words, {duration_sec:.1f}s)")
+        try:
+            with self._persist_lock:
+                entry = self.history_manager.add_entry(raw_text, refined_text, style, script_mode)
+                self.config_manager.update_metrics(word_count, duration_sec, style)
+                hotkey = self.config_manager.get("hotkey.combination", "ctrl_l")
+                onboarding_completed = bool(self.config_manager.get("onboarding_completed"))
+                logging.info(f"[Metrics] Updated: +{word_count} words, +{duration_sec:.1f}s, style={style}")
+
+            # Cloud writes stay outside the lock so the next riff can save locally
+            # while this riff's HTTP is still in flight. log-usage is an INSERT, so
+            # overlapping requests from back-to-back riffs do not clobber each other.
+            if self.auth_manager:
+                if entry:
+                    try:
+                        self.auth_manager.upload_history_entry(
+                            entry["timestamp"], raw_text, refined_text, style, script_mode
+                        )
+                    except Exception as e:
+                        logging.warning(f"[Auth] History upload error: {e}")
+                try:
+                    self.auth_manager.log_usage(word_count, duration_sec, style, script_mode)
+                    self.auth_manager.sync_user_settings(
+                        hotkey,
+                        style,
+                        script_mode,
+                        onboarding_completed,
+                    )
+                    logging.info("[Auth] Usage logged to backend")
+                except Exception as e:
+                    logging.warning(f"[Auth] Usage logging error (non-fatal): {e}")
+            logging.info("[Persist] Background save complete")
+        except Exception as e:
+            logging.error(f"[Persist] Background save failed: {e}", exc_info=True)
+
+    def shutdown_persist(self, wait: bool = True):
+        logging.info("[Persist] Shutting down background save pool")
+        with self._persist_lock:
+            self._persist_shutdown = True
+        self._persist_pool.shutdown(wait=wait)
 
     def _refine_text(self, text, style):
         """Refine text using the configured style."""
@@ -323,10 +404,18 @@ class RiffApp:
             except Exception as e:
                 logging.warning(f"[Auth] Failed to initialize AuthManager: {e}")
 
-        # Load API Key (BYOK for free tier, or None for managed key users)
+        # Load API Key (BYOK for free tier, 24h RAM lease for paid)
+        self._uses_byok = True
         if self.auth_manager:
+            self._uses_byok = get_tier_features(self.auth_manager.get_tier()).byok
             self.api_key = self.auth_manager.get_effective_api_key()
-            logging.info(f"[Auth] Using {'BYOK' if self.api_key else 'managed key (proxy)'}")
+            if self.api_key:
+                logging.info("[Auth] Groq client ready (%s)", "BYOK" if self._uses_byok else "paid 24h RAM lease")
+            else:
+                logging.info(
+                    "[Auth] Groq key not ready yet (%s)",
+                    "enter key in Settings" if self._uses_byok else "will lease on first riff",
+                )
         else:
             self.api_key = self.config.get("api.api_key")
 
@@ -395,9 +484,8 @@ class RiffApp:
         except OSError:
             pass
 
-        # Control Center Process Tracking
+        # Control Center is a separate Settings window. Closing it must not quit the tray.
         self.control_center_process = None
-        self._cc_watcher_running = False  # Prevents duplicate watcher threads
 
         logging.info("Initialization Complete")
 
@@ -510,23 +598,20 @@ class RiffApp:
             except Exception as e:
                 logging.warning("[Auth] Startup cloud sync failed: %s", e)
         
-        # Check Accessibility Permission
+        # Check Accessibility without prompting. Hotkeys start once it is granted.
         perm_status = self.permission_manager.check_accessibility()
         logging.info(f"Accessibility Permission Status: {perm_status}")
-        
-        if not perm_status:
-            print("WARNING: Accessibility permission missing.")
-            logging.warning("Accessibility permission missing!")
-            self.tray.show_notification("Permission Needed", "Accessibility access needed for hotkeys.")
-        
-        # Start Hotkey Listener
-        self.start_listener()
+
+        if perm_status:
+            self.start_listener()
+        else:
+            logging.info("Deferring hotkey listener until Accessibility is granted in Settings")
 
         # Start Config Monitor (also detects API key changes from onboarding)
         threading.Thread(target=self.monitor_config, daemon=True).start()
 
-        # Notify user if API key is missing (first run — onboarding in progress)
-        if not self.api_key:
+        # Notify user if API key is missing (free-tier BYOK only)
+        if not self.api_key and getattr(self, "_uses_byok", True):
             # Delay slightly so tray icon is visible before notification
             def _notify_setup():
                 time.sleep(1.5)
@@ -578,6 +663,10 @@ class RiffApp:
         while self.running:
             time.sleep(2.0)
             try:
+                if self.listener is None and self.permission_manager.check_accessibility():
+                    logging.info("[ConfigMonitor] Accessibility granted — starting hotkey listener")
+                    self.start_listener()
+
                 if not os.path.exists(self.config.config_path):
                     continue
 
@@ -856,131 +945,62 @@ class RiffApp:
             logging.info("Manual Stop Triggered")
             self._stop_and_process()
 
+    def _control_center_app_path(self) -> str:
+        if getattr(sys, 'frozen', False):
+            candidates = []
+            exe_dir = os.path.dirname(sys.executable)
+            candidates.append(os.path.abspath(os.path.join(exe_dir, "..", "Resources", "RiffControlCenter.app")))
+            if hasattr(sys, '_MEIPASS'):
+                candidates.append(os.path.join(sys._MEIPASS, "RiffControlCenter.app"))
+            candidates.append(os.path.abspath(os.path.join(exe_dir, "..", "Frameworks", "RiffControlCenter.app")))
+            candidates.append(os.path.join(exe_dir, "RiffControlCenter.app"))
+            for c in candidates:
+                if os.path.exists(c) and os.path.exists(os.path.join(c, "Contents", "MacOS")):
+                    return c
+            return candidates[0]
+        return os.path.join(os.getcwd(), "config_ui", "build", "RiffControlCenter.app")
+
     def _is_control_center_running(self) -> bool:
-        """
-        Return True if RiffControlCenter is running by any means.
-
-        Checks both our tracked subprocess handle AND any system process
-        named 'RiffControlCenter'. This covers:
-          - CC launched by us via the tray Settings button
-          - CC opened during onboarding (launch_settings_app)
-          - CC opened manually by the user
-        """
-        # 1. Our tracked process
-        if self.control_center_process is not None:
-            if self.control_center_process.poll() is None:
-                logging.debug("[CCCheck] Tracked process is running")
-                return True
-            logging.debug("[CCCheck] Tracked process exited, clearing handle")
-            self.control_center_process = None  # Process exited, clear handle
-
-        # 2. System-wide check (catches any other launch path)
         try:
             result = subprocess.run(
                 ["pgrep", "-x", "RiffControlCenter"],
                 capture_output=True, text=True
             )
-            is_running = result.returncode == 0
-            logging.debug(f"[CCCheck] pgrep check: {is_running} (pids: {result.stdout.strip() if is_running else 'none'})")
-            return is_running
-        except Exception as e:
-            logging.debug(f"[CCCheck] pgrep failed: {e}")
+            return result.returncode == 0
+        except Exception:
             return False
 
-    def _ensure_cc_watcher(self):
-        """
-        Start a watcher thread (at most one) that quits the tray app
-        when Control Center is closed by the user from the dock.
-
-        The watcher polls every 1.5 s. When CC disappears and self.running
-        is still True it means the user closed CC — so we quit the tray too.
-        self.running is set to False first in quit(), so if we initiated the
-        shutdown the watcher silently exits without calling quit() again.
-        """
-        if self._cc_watcher_running:
-            return
-
-        self._cc_watcher_running = True
-
-        def watch():
-            logging.info("[CCWatcher] Watcher started")
-            while self.running:
-                time.sleep(1.5)
-                if not self._is_control_center_running():
-                    if self.running:
-                        logging.info("[CCWatcher] Control Center closed by user - quitting tray app")
-                        self.quit()
-                    break
-            self._cc_watcher_running = False
-            logging.info("[CCWatcher] Watcher stopped")
-
-        threading.Thread(target=watch, daemon=True).start()
+    def _quit_control_center(self):
+        try:
+            subprocess.run(
+                ["osascript", "-e", 'tell application "RiffControlCenter" to quit'],
+                capture_output=True, timeout=3
+            )
+        except Exception:
+            pass
+        try:
+            subprocess.run(["pkill", "-x", "RiffControlCenter"], capture_output=True)
+        except Exception:
+            pass
 
     def open_settings(self):
+        """Open or bring forward Control Center. Closing that window does not quit Riff."""
         try:
             logging.info("[Settings] open_settings() called")
-
-            # System-wide check: covers CC opened via onboarding, manual open,
-            # or a previous tray launch. Prevents duplicate windows.
-            if self._is_control_center_running():
-                logging.info("[Settings] Control Center already running, bringing to front")
-                try:
-                    subprocess.call(["osascript", "-e", 'tell application "RiffControlCenter" to activate'])
-                    logging.info("[Settings] Successfully activated existing CC window")
-                except Exception as e:
-                    logging.warning(f"[Settings] Failed to activate Control Center window: {e}")
-                # Make sure the watcher is running even if we didn't launch CC
-                self._ensure_cc_watcher()
-                return
-
-            logging.info("[Settings] No running CC detected, launching new instance")
-
-            # Find Control Center app path
-            if getattr(sys, 'frozen', False):
-                candidates = []
-                exe_dir = os.path.dirname(sys.executable)
-
-                candidates.append(os.path.abspath(os.path.join(exe_dir, "..", "Resources", "RiffControlCenter.app")))
-                if hasattr(sys, '_MEIPASS'):
-                    candidates.append(os.path.join(sys._MEIPASS, "RiffControlCenter.app"))
-                candidates.append(os.path.abspath(os.path.join(exe_dir, "..", "Frameworks", "RiffControlCenter.app")))
-                candidates.append(os.path.join(exe_dir, "RiffControlCenter.app"))
-
-                app_path = candidates[0]
-                for c in candidates:
-                    if os.path.exists(c) and os.path.exists(os.path.join(c, "Contents", "MacOS")):
-                        app_path = c
-                        break
-            else:
-                app_path = os.path.join(os.getcwd(), "config_ui", "build", "RiffControlCenter.app")
-
-            logging.info(f"[Settings] Launching settings app at: {app_path}")
-            if os.path.exists(app_path):
-                binary_path = os.path.join(app_path, "Contents", "MacOS", "RiffControlCenter")
-                logging.info(f"[Settings] Binary path: {binary_path}, exists: {os.path.exists(binary_path)}")
-                if os.path.exists(binary_path):
-                    # Ensure execution permissions persist (PyInstaller strips them from datas)
-                    os.chmod(binary_path, os.stat(binary_path).st_mode | stat.S_IEXEC)
-                    self.control_center_process = subprocess.Popen([binary_path])
-                    logging.info(f"[Settings] Control Center launched with PID: {self.control_center_process.pid}")
-
-                    # Bring window to front after brief init delay
-                    time.sleep(0.3)
-                    try:
-                        subprocess.call(["osascript", "-e", 'tell application "RiffControlCenter" to activate'])
-                    except Exception as e:
-                        logging.warning(f"Failed to activate Control Center window: {e}")
-
-                    # Watch CC - quit tray if user closes CC from dock
-                    self._ensure_cc_watcher()
-                    logging.info("[Settings] Watcher started, Settings launch complete")
-                else:
-                    logging.warning(f"[Settings] Binary not found, using 'open -a' fallback")
-                    subprocess.call(["open", "-a", app_path])
-            else:
+            app_path = self._control_center_app_path()
+            logging.info(f"[Settings] Control Center path: {app_path}")
+            if not os.path.exists(app_path):
                 logging.error(f"[Settings] Settings app not found at {app_path}")
                 subprocess.call(["open", self.config.config_path])
+                return
 
+            binary_path = os.path.join(app_path, "Contents", "MacOS", "RiffControlCenter")
+            if os.path.exists(binary_path):
+                os.chmod(binary_path, os.stat(binary_path).st_mode | stat.S_IEXEC)
+
+            # `open` uses Launch Services so the Dock app can be quit and reopened.
+            subprocess.Popen(["open", app_path])
+            logging.info("[Settings] Control Center launched via open")
         except Exception as e:
             logging.error(f"[Settings] Could not open settings: {e}", exc_info=True)
 
@@ -1050,22 +1070,7 @@ class RiffApp:
         log_activity("Riff App Quit")
         self.running = False
 
-        # Terminate Control Center if running
-        if self.control_center_process is not None:
-            try:
-                poll_result = self.control_center_process.poll()
-                if poll_result is None:  # Still running
-                    logging.info("Terminating Control Center process")
-                    self.control_center_process.terminate()
-                    # Give it 2 seconds to close gracefully
-                    try:
-                        self.control_center_process.wait(timeout=2)
-                    except subprocess.TimeoutExpired:
-                        # Force kill if it doesn't close gracefully
-                        logging.warning("Control Center didn't close gracefully, force killing")
-                        self.control_center_process.kill()
-            except Exception as e:
-                logging.error(f"Error terminating Control Center: {e}")
+        self._quit_control_center()
 
         try:
             if self.listener:
@@ -1076,8 +1081,14 @@ class RiffApp:
         try:
             self.audio_queue.put(None)
             self.processing_thread.join(timeout=2)
-        except:
+        except Exception:
             pass
+
+        try:
+            if self.processing_thread:
+                self.processing_thread.shutdown_persist(wait=True)
+        except Exception as e:
+            logging.warning(f"[Persist] Shutdown error: {e}")
 
         self.tray.stop()
         logging.info("Force exiting now.")
@@ -1086,20 +1097,22 @@ class RiffApp:
 
 def launch_settings_app(config, app_instance=None):
     """
-    Launch Control Center during onboarding (before app is fully initialized).
-    If app_instance is provided, track the process and start the watcher.
+    Launch Control Center. Used during onboarding and from the tray Settings menu.
+    Closing Control Center does not quit the menu-bar app.
     """
     try:
+        if app_instance:
+            app_instance.open_settings()
+            return
+
         if getattr(sys, 'frozen', False):
             candidates = []
             exe_dir = os.path.dirname(sys.executable)
-
             candidates.append(os.path.abspath(os.path.join(exe_dir, "..", "Resources", "RiffControlCenter.app")))
             if hasattr(sys, '_MEIPASS'):
                 candidates.append(os.path.join(sys._MEIPASS, "RiffControlCenter.app"))
             candidates.append(os.path.abspath(os.path.join(exe_dir, "..", "Frameworks", "RiffControlCenter.app")))
             candidates.append(os.path.join(exe_dir, "RiffControlCenter.app"))
-
             app_path = candidates[0]
             for c in candidates:
                 if os.path.exists(c) and os.path.exists(os.path.join(c, "Contents", "MacOS")):
@@ -1112,32 +1125,11 @@ def launch_settings_app(config, app_instance=None):
         if os.path.exists(app_path):
             binary_path = os.path.join(app_path, "Contents", "MacOS", "RiffControlCenter")
             if os.path.exists(binary_path):
-                # Ensure execution permissions persist (PyInstaller strips them from datas)
                 os.chmod(binary_path, os.stat(binary_path).st_mode | stat.S_IEXEC)
-
-                # Launch via binary path and track the process if app_instance available
-                if app_instance:
-                    app_instance.control_center_process = subprocess.Popen([binary_path])
-                    logging.info(f"Control Center launched with tracked PID: {app_instance.control_center_process.pid}")
-
-                    # Bring window to front after brief init delay
-                    time.sleep(0.3)
-                    try:
-                        subprocess.call(["osascript", "-e", 'tell application "RiffControlCenter" to activate'])
-                    except Exception as e:
-                        logging.warning(f"Failed to activate Control Center window: {e}")
-
-                    # Start watcher to quit tray if user closes CC from dock
-                    app_instance._ensure_cc_watcher()
-                else:
-                    # Fallback: use 'open' without tracking (onboarding before app init)
-                    subprocess.call(["open", app_path])
-            else:
-                subprocess.call(["open", "-a", app_path])
+            subprocess.call(["open", app_path])
         else:
             logging.error(f"Settings app not found at {app_path}")
             subprocess.call(["open", config.config_path])
-
     except Exception as e:
         logging.error(f"Could not open settings: {e}")
 

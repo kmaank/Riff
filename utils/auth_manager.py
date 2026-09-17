@@ -5,13 +5,14 @@ Handles Supabase authentication, subscription validation, quota enforcement, and
 
 import json
 import logging
+import os
 import platform
+import time
 from urllib.parse import parse_qs, quote, urlparse
 import httpx
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple
-import keyring
 
 from utils.subscription_config import get_tier_features
 
@@ -31,6 +32,7 @@ class AuthManager:
         # File paths
         self.auth_state_path = self.support_dir / "auth_state.json"
         self.auth_cache_path = self.support_dir / "auth_cache.json"
+        self.session_path = self.support_dir / "session.json"
 
         # Supabase configuration
         self.supabase_url = self.config.config.get("auth", {}).get("supabase_url", "")
@@ -52,6 +54,8 @@ class AuthManager:
         self._last_validated: Optional[datetime] = None
         self._access_token: Optional[str] = None
         self._refresh_token: Optional[str] = None
+        self._managed_key: Optional[str] = None
+        self._managed_key_expires: float = 0.0
 
         # Load cached state
         self._load_cached_state()
@@ -66,14 +70,47 @@ class AuthManager:
     
     @property
     def is_authenticated(self) -> bool:
-        """Check if user is authenticated (has valid tokens)"""
-        # Check for stored tokens
-        access_token = self._get_access_token()
-        return access_token is not None
-    
+        """True when Swift/Python have marked the user signed in via auth_state.json."""
+        try:
+            if self.auth_state_path.exists():
+                with open(self.auth_state_path, 'r') as f:
+                    state = json.load(f)
+                if not state.get("authenticated", False):
+                    return False
+                self._auth_authenticated = True
+                self._auth_email = state.get("email", self._auth_email)
+                self._auth_user_id = state.get("user_id", self._auth_user_id)
+                return True
+        except Exception:
+            pass
+        return bool(self._auth_authenticated)
+
+    def _read_session(self) -> dict:
+        try:
+            if self.session_path.exists():
+                with open(self.session_path, 'r') as f:
+                    data = json.load(f)
+                return data if isinstance(data, dict) else {}
+        except Exception as e:
+            logger.warning(f"[Auth] Could not read session.json: {e}")
+        return {}
+
+    def _write_session(self, **updates):
+        data = self._read_session()
+        for key, value in updates.items():
+            if value is None:
+                data.pop(key, None)
+            else:
+                data[key] = value
+        try:
+            fd = os.open(self.session_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, 'w') as f:
+                json.dump(data, f)
+        except Exception as e:
+            logger.error(f"[Auth] Error writing session.json: {e}")
+
     def _get_access_token(self) -> Optional[str]:
-        """Get access token from keychain or memory"""
-        # Respect auth_state.json from Swift - if user logged out, clear cache
+        """Get access token from memory or session.json. Never touches Keychain on launch."""
         try:
             if self.auth_state_path.exists():
                 with open(self.auth_state_path, 'r') as f:
@@ -86,45 +123,29 @@ class AuthManager:
             pass
 
         if self._access_token:
-            logger.debug("[Auth] Using cached in-memory access token")
             return self._access_token
 
-        try:
-            token = keyring.get_password("riff", "supabase_access_token")
-            if token:
-                self._access_token = token
-                logger.info(f"[Auth] Access token loaded from keychain ({token[:10]}...)")
-            else:
-                logger.warning("[Auth] No access token found in keychain")
+        token = self._read_session().get("access_token")
+        if token:
+            self._access_token = token
+            logger.info("[Auth] Access token loaded from session.json")
             return token
-        except Exception as e:
-            logger.error(f"[Auth] Error reading access token from keychain: {e}")
-            return None
-    
+        return None
+
     def _get_refresh_token(self) -> Optional[str]:
-        """Get refresh token from keychain"""
         if self._refresh_token:
             return self._refresh_token
-        
-        try:
-            token = keyring.get_password("riff", "supabase_refresh_token")
-            if token:
-                self._refresh_token = token
-            return token
-        except Exception as e:
-            logger.error(f"Error getting refresh token: {e}")
-            return None
-    
+        token = self._read_session().get("refresh_token")
+        if token:
+            self._refresh_token = token
+        return token
+
     def _store_tokens(self, access_token: str, refresh_token: str):
-        """Store tokens securely in macOS Keychain"""
-        try:
-            keyring.set_password("riff", "supabase_access_token", access_token)
-            keyring.set_password("riff", "supabase_refresh_token", refresh_token)
-            self._access_token = access_token
-            self._refresh_token = refresh_token
-            logger.info("Tokens stored securely")
-        except Exception as e:
-            logger.error(f"Error storing tokens: {e}")
+        """Store tokens in Application Support (no Keychain prompt for unsigned builds)."""
+        self._access_token = access_token
+        self._refresh_token = refresh_token
+        self._write_session(access_token=access_token, refresh_token=refresh_token)
+        logger.info("Tokens stored in session.json")
     
     def login(self, email: str, password: str) -> Dict[str, Any]:
         """Login with email and password"""
@@ -236,16 +257,17 @@ class AuthManager:
     
     def logout(self):
         """Logout and clear tokens"""
-        try:
-            keyring.delete_password("riff", "supabase_access_token")
-            keyring.delete_password("riff", "supabase_refresh_token")
-            keyring.delete_password("riff", "managed_groq_key")
-        except Exception:
-            pass
-        
         self._access_token = None
         self._refresh_token = None
+        self._managed_key = None
+        self._managed_key_expires = 0.0
         self._cached_subscription = None
+        self._auth_authenticated = False
+        try:
+            if self.session_path.exists():
+                self.session_path.unlink()
+        except Exception:
+            pass
         self._write_auth_state(False, "", "")
         logger.info("Logged out successfully")
     
@@ -462,48 +484,62 @@ class AuthManager:
             return self._fetch_managed_key()
     
     def _fetch_managed_key(self) -> Optional[str]:
-        """Fetch managed Groq API key from backend"""
-        # Check keychain cache first
-        try:
-            cached_key = keyring.get_password("riff", "managed_groq_key")
-            if cached_key:
-                logger.info("Using cached managed key")
-                return cached_key
-        except Exception:
-            pass
-        
-        # Fetch from backend
+        """
+        Unwrap the managed Groq key from the server at most about once per 24h.
+        Plaintext lives in process memory only — never session.json / config / UI.
+        The Mac then calls Groq directly so riffs are not proxied.
+        """
+        now = time.time()
+        if self._managed_key and now < self._managed_key_expires - 60:
+            return self._managed_key
+
+        # Drop any leftover plaintext that older builds wrote to disk
+        session = self._read_session()
+        if session.get("managed_groq_key"):
+            self._write_session(managed_groq_key=None)
+
         access_token = self._get_access_token()
         if not access_token:
             logger.error("Cannot fetch managed key: not authenticated")
             return None
-        
+
         url = f"{self.supabase_url}/functions/v1/get-api-key"
         headers = {
             "Authorization": f"Bearer {access_token}",
-            "apikey": self.supabase_anon_key
+            "apikey": self.supabase_anon_key,
         }
-        
+
         try:
-            response = httpx.post(url, headers=headers, timeout=10.0)
+            response = httpx.post(url, headers=headers, json={}, timeout=10.0)
             response.raise_for_status()
-            
             result = response.json()
             api_key = result.get("api_key")
-            
-            if api_key:
-                # Cache in keychain
+            if not api_key:
+                logger.error("Managed key response missing api_key")
+                return None
+
+            lease = int(result.get("lease_seconds") or 24 * 3600)
+            expires_at = result.get("expires_at")
+            if expires_at:
                 try:
-                    keyring.set_password("riff", "managed_groq_key", api_key)
-                except Exception as e:
-                    logger.warning(f"Could not cache managed key: {e}")
-                
-                logger.info("Managed key fetched successfully")
-                return api_key
+                    exp = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+                    self._managed_key_expires = exp.timestamp()
+                except Exception:
+                    self._managed_key_expires = now + lease
+            else:
+                self._managed_key_expires = now + lease
+
+            self._managed_key = api_key
+            logger.info(
+                "[Auth] Managed Groq key leased until %s (RAM only)",
+                datetime.fromtimestamp(self._managed_key_expires).isoformat(),
+            )
+            return api_key
         except httpx.HTTPError as e:
             logger.error(f"Failed to fetch managed key: {e}")
-        
-        return None
+            if self._managed_key and now < self._managed_key_expires:
+                return self._managed_key
+            return None
     
     # ========================================================================
     # IPC with Swift UI

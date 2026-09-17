@@ -17,7 +17,7 @@ export interface Profile {
 /**
  * Subscription status
  */
-export type SubscriptionTier = "free" | "starter" | "pro" | "lifetime";
+export type SubscriptionTier = "free" | "monthly" | "yearly" | "starter" | "pro" | "lifetime";
 export type SubscriptionStatus = "active" | "past_due" | "canceled" | "expired";
 
 export interface Subscription {

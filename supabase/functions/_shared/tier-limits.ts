@@ -21,11 +21,27 @@ export const TIER_LIMITS: Record<string, TierLimits> = {
   },
   starter: {
     riffs_limit: 500,
-    seconds_limit: 7200,  // 2 hours (in seconds)
+    seconds_limit: 7200,
     all_styles: true,
     custom_prompts: false,
-    byok: false,          // Riff-managed key
+    byok: false,
     priority: false,
+  },
+  monthly: {
+    riffs_limit: null,
+    seconds_limit: null,
+    all_styles: true,
+    custom_prompts: true,
+    byok: false,
+    priority: true,
+  },
+  yearly: {
+    riffs_limit: null,
+    seconds_limit: null,
+    all_styles: true,
+    custom_prompts: true,
+    byok: false,
+    priority: true,
   },
   pro: {
     riffs_limit: null,    // Unlimited

@@ -2,7 +2,7 @@
 //  SubscriptionView.swift
 //  RiffControlCenter
 //
-//  Subscription tier selection and upgrade view
+//  Free / Monthly / Yearly plan picker
 //
 
 import SwiftUI
@@ -12,52 +12,54 @@ struct SubscriptionView: View {
     @EnvironmentObject var authManager: SwiftAuthManager
     @State private var isCreatingCheckout: Bool = false
     @State private var selectedTier: String = ""
+    @State private var checkoutError: String?
+
+    /// When true, used inside onboarding: no close button, Free is selectable.
+    var embedded: Bool = false
+    var onChoseFree: (() -> Void)? = nil
+    var onPaidCheckoutOpened: (() -> Void)? = nil
 
     let tiers: [(id: String, name: String, price: String, priceDetail: String, features: [String], badge: String, color: Color)] = [
         (
             id: "free",
             name: "Free",
             price: "$0",
-            priceDetail: "Bring Your Own Key",
+            priceDetail: "Bring your own Groq key",
             features: [
                 "100 riffs per month",
-                "Unlimited recording time",
                 "Basic styles (clean, casual)",
                 "Your own Groq API key",
                 "Cloud history sync"
             ],
-            badge: "Current",
+            badge: "BYOK",
             color: .gray
         ),
         (
-            id: "starter",
-            name: "Starter",
+            id: "monthly",
+            name: "Monthly",
             price: "$9.99",
             priceDetail: "per month",
             features: [
-                "500 riffs per month",
-                "2 hours recording time",
-                "All 4 styles",
-                "Managed API key (no setup)",
+                "Unlimited riffs",
+                "All styles + custom prompts",
+                "Managed Groq key — no setup",
                 "Cloud history sync",
-                "Priority support"
+                "Cancel anytime"
             ],
             badge: "Popular",
             color: .blue
         ),
         (
-            id: "pro",
-            name: "Pro",
-            price: "$19.99",
-            priceDetail: "per month",
+            id: "yearly",
+            name: "Yearly",
+            price: "$79",
+            priceDetail: "per year",
             features: [
-                "Unlimited riffs",
-                "Unlimited recording time",
-                "All styles + custom prompts",
-                "Managed API key",
+                "Everything in Monthly",
+                "Two months free vs monthly",
+                "Managed Groq key — no setup",
                 "Cloud history sync",
-                "Priority support",
-                "Early access to new features"
+                "Best value if you riff daily"
             ],
             badge: "Best Value",
             color: .purple
@@ -66,164 +68,103 @@ struct SubscriptionView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Choose Your Plan")
+                    Text(embedded ? "Choose your plan" : "Change your plan")
                         .font(.title)
                         .fontWeight(.bold)
 
-                    Text("Upgrade anytime, cancel anytime")
+                    Text(embedded
+                         ? "Start free with your own key, or subscribe and skip Groq setup."
+                         : "Upgrade anytime, cancel anytime")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
 
                 Spacer()
 
-                Button(action: { dismiss() }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 24))
-                        .foregroundStyle(.secondary)
+                if !embedded {
+                    Button(action: { dismiss() }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 24))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
-            .padding(30)
-            .background(Color(NSColor.windowBackgroundColor))
+            .padding(embedded ? 16 : 30)
 
             Divider()
 
-            // Tier Cards
             ScrollView {
-                HStack(alignment: .top, spacing: 20) {
+                HStack(alignment: .top, spacing: 16) {
                     ForEach(tiers, id: \.id) { tier in
                         TierCard(
                             tier: tier,
-                            isCurrentTier: authManager.subscriptionTier == tier.id,
+                            isCurrentTier: !embedded && authManager.subscriptionTier == tier.id,
                             isSelected: selectedTier == tier.id,
                             isLoading: isCreatingCheckout && selectedTier == tier.id,
+                            embedded: embedded,
                             onSelect: {
-                                if tier.id != "free" && tier.id != authManager.subscriptionTier {
+                                if tier.id == "free" {
+                                    if embedded {
+                                        onChoseFree?()
+                                    }
+                                } else if tier.id != authManager.subscriptionTier {
                                     createCheckoutSession(for: tier.id)
                                 }
                             }
                         )
                     }
                 }
-                .padding(30)
+                .padding(embedded ? 16 : 30)
 
-                // Lifetime Option
-                VStack(alignment: .leading, spacing: 16) {
-                    Divider()
+                if let checkoutError {
+                    Text(checkoutError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .padding(.horizontal)
+                }
 
-                    HStack {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text("Lifetime Deal")
-                                    .font(.title2)
-                                    .fontWeight(.bold)
+                if !embedded {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Frequently Asked Questions")
+                            .font(.headline)
+                            .padding(.bottom, 4)
 
-                                Text("LIMITED TIME")
-                                    .font(.caption2)
-                                    .fontWeight(.bold)
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .background(Color.orange)
-                                    .cornerRadius(4)
-                            }
-
-                            Text("Pay once, use forever. Get Pro features for life.")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Spacer()
-
-                        VStack(alignment: .trailing, spacing: 4) {
-                            Text("$149")
-                                .font(.system(size: 36, weight: .bold))
-                                .foregroundStyle(.orange)
-
-                            Text("one-time payment")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Button(action: { createCheckoutSession(for: "lifetime") }) {
-                            HStack {
-                                if isCreatingCheckout && selectedTier == "lifetime" {
-                                    ProgressView()
-                                        .progressViewStyle(.circular)
-                                        .scaleEffect(0.8)
-                                        .tint(.white)
-                                } else {
-                                    Image(systemName: "sparkles")
-                                    Text("Get Lifetime")
-                                        .fontWeight(.semibold)
-                                }
-                            }
-                            .padding(.horizontal, 24)
-                            .padding(.vertical, 12)
-                            .background(Color.orange)
-                            .foregroundStyle(.white)
-                            .cornerRadius(8)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(isCreatingCheckout || authManager.subscriptionTier == "lifetime")
-                    }
-                    .padding(24)
-                    .background(
-                        LinearGradient(
-                            colors: [Color.orange.opacity(0.1), Color.orange.opacity(0.05)],
-                            startPoint: .leading,
-                            endPoint: .trailing
+                        FAQItem(
+                            question: "Can I change plans later?",
+                            answer: "Yes. Upgrade or switch from Account anytime. Changes take effect at your next billing cycle."
                         )
-                    )
-                    .cornerRadius(12)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.orange.opacity(0.3), lineWidth: 2)
-                    )
+
+                        FAQItem(
+                            question: "What do I get if I stay on Free?",
+                            answer: "You use your own Groq API key. Paid monthly and yearly plans include a managed key so you can skip that setup."
+                        )
+
+                        FAQItem(
+                            question: "Can I cancel anytime?",
+                            answer: "Yes. Cancel from Account → Manage Billing. You keep access until the end of the billing period."
+                        )
+                    }
+                    .padding(.horizontal, 30)
+                    .padding(.bottom, 40)
                 }
-                .padding(.horizontal, 30)
-                .padding(.bottom, 30)
-
-                // FAQ / Info
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Frequently Asked Questions")
-                        .font(.headline)
-                        .padding(.bottom, 4)
-
-                    FAQItem(
-                        question: "Can I change plans later?",
-                        answer: "Yes! Upgrade or downgrade anytime. Changes take effect at your next billing cycle."
-                    )
-
-                    FAQItem(
-                        question: "What payment methods do you accept?",
-                        answer: "We accept all major credit cards via Stripe. All payments are secure and encrypted."
-                    )
-
-                    FAQItem(
-                        question: "Can I cancel anytime?",
-                        answer: "Absolutely. Cancel from your account settings. You'll keep access until the end of your billing period."
-                    )
-                }
-                .padding(.horizontal, 30)
-                .padding(.bottom, 40)
             }
         }
-        .frame(width: 900, height: 700)
+        .frame(width: embedded ? nil : 900, height: embedded ? nil : 700)
     }
 
     private func createCheckoutSession(for tier: String) {
         selectedTier = tier
         isCreatingCheckout = true
+        checkoutError = nil
 
         Task {
             guard let accessToken = UserDefaults.standard.string(forKey: "supabase_access_token") else {
                 await MainActor.run {
                     isCreatingCheckout = false
+                    checkoutError = "Please sign in again, then retry."
                 }
                 return
             }
@@ -239,18 +180,37 @@ struct SubscriptionView: View {
             request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
             do {
-                let (data, _) = try await URLSession.shared.data(for: request)
+                let (data, response) = try await URLSession.shared.data(for: request)
+                if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+                    let message = (try? JSONDecoder().decode(CheckoutError.self, from: data))?.error
+                        ?? "Could not start checkout. Price IDs may not be configured yet."
+                    await MainActor.run {
+                        isCreatingCheckout = false
+                        checkoutError = message
+                    }
+                    return
+                }
                 if let result = try? JSONDecoder().decode(CheckoutResponse.self, from: data),
                    let checkoutUrl = URL(string: result.url) {
                     await MainActor.run {
                         NSWorkspace.shared.open(checkoutUrl)
                         isCreatingCheckout = false
-                        dismiss()
+                        if embedded {
+                            onPaidCheckoutOpened?()
+                        } else {
+                            dismiss()
+                        }
+                    }
+                } else {
+                    await MainActor.run {
+                        isCreatingCheckout = false
+                        checkoutError = "Could not start checkout. Try again in a moment."
                     }
                 }
             } catch {
                 await MainActor.run {
                     isCreatingCheckout = false
+                    checkoutError = error.localizedDescription
                 }
             }
         }
@@ -262,11 +222,11 @@ struct TierCard: View {
     let isCurrentTier: Bool
     let isSelected: Bool
     let isLoading: Bool
+    var embedded: Bool = false
     let onSelect: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            // Header
             VStack(alignment: .leading, spacing: 8) {
                 if !tier.badge.isEmpty {
                     Text(tier.badge)
@@ -294,7 +254,6 @@ struct TierCard: View {
 
             Divider()
 
-            // Features
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(tier.features, id: \.self) { feature in
                     HStack(alignment: .top, spacing: 8) {
@@ -311,7 +270,6 @@ struct TierCard: View {
 
             Spacer()
 
-            // Action Button
             Button(action: onSelect) {
                 HStack {
                     if isLoading {
@@ -350,9 +308,9 @@ struct TierCard: View {
         if isCurrentTier {
             return "Current Plan"
         } else if tier.id == "free" {
-            return "Downgrade"
+            return embedded ? "Continue with Free" : "Stay on Free"
         } else {
-            return "Select \(tier.name)"
+            return embedded ? "Subscribe" : "Select \(tier.name)"
         }
     }
 
@@ -360,15 +318,17 @@ struct TierCard: View {
         if isCurrentTier {
             return Color.gray.opacity(0.2)
         } else if tier.id == "free" {
-            return Color.gray.opacity(0.2)
+            return embedded ? Color.gray.opacity(0.25) : Color.gray.opacity(0.2)
         } else {
             return tier.color
         }
     }
 
     private func buttonForeground() -> Color {
-        if isCurrentTier || tier.id == "free" {
+        if isCurrentTier {
             return .secondary
+        } else if tier.id == "free" {
+            return embedded ? .primary : .secondary
         } else {
             return .white
         }
@@ -403,6 +363,10 @@ struct CheckoutResponse: Codable {
         case url
         case sessionId = "session_id"
     }
+}
+
+private struct CheckoutError: Codable {
+    let error: String?
 }
 
 struct SubscriptionView_Previews: PreviewProvider {

@@ -3,6 +3,7 @@
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { getSupabaseServiceClient, getStripeClient, getManagedGroqKey } from '../_shared/clients.ts';
+import { wrapApiKey } from '../_shared/crypto.ts';
 
 serve(async (req) => {
   try {
@@ -84,14 +85,20 @@ serve(async (req) => {
           break;
         }
 
-        // Update subscription status and period
+        const mapped = mapStripeStatus(subscription.status);
+
         await supabase
           .from('subscriptions')
           .update({
-            status: subscription.status,
+            status: mapped,
             current_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
             current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
           })
+          .eq('user_id', sub.user_id);
+
+        await supabase
+          .from('api_keys')
+          .update({ is_active: mapped === 'active' })
           .eq('user_id', sub.user_id);
 
         console.log(`Subscription updated for customer ${customerId}`);
@@ -148,10 +155,14 @@ serve(async (req) => {
 
         if (!sub) break;
 
-        // Mark as past_due
         await supabase
           .from('subscriptions')
           .update({ status: 'past_due' })
+          .eq('user_id', sub.user_id);
+
+        await supabase
+          .from('api_keys')
+          .update({ is_active: false })
           .eq('user_id', sub.user_id);
 
         console.log(`Payment failed for customer ${customerId}`);
@@ -173,6 +184,13 @@ serve(async (req) => {
   }
 });
 
+function mapStripeStatus(status: string): 'active' | 'past_due' | 'canceled' | 'expired' {
+  if (status === 'active' || status === 'trialing') return 'active';
+  if (status === 'past_due' || status === 'unpaid') return 'past_due';
+  if (status === 'canceled') return 'canceled';
+  return 'expired';
+}
+
 // Helper: Provision managed API key for paid tier
 async function provisionManagedKey(supabase: any, userId: string, tier: string) {
   // Check if key already exists
@@ -182,26 +200,25 @@ async function provisionManagedKey(supabase: any, userId: string, tier: string) 
     .eq('user_id', userId)
     .single();
 
+  const managedKey = getManagedGroqKey(tier);
+  if (!managedKey) {
+    console.error('No managed Groq key configured for tier', tier);
+    return;
+  }
+
+  const wrapped = await wrapApiKey(managedKey);
+
   if (existing) {
-    // Reactivate existing key
     await supabase
       .from('api_keys')
-      .update({ is_active: true, tier })
+      .update({ is_active: true, tier, encrypted_key: wrapped })
       .eq('user_id', userId);
   } else {
-    // Create new key
-    // TODO: In production, fetch a real Groq key from pool and encrypt it
-    const managedKey = getManagedGroqKey(tier);
-    if (!managedKey) {
-      console.error('No managed Groq key configured for tier', tier);
-      return;
-    }
-    
     await supabase
       .from('api_keys')
       .insert({
         user_id: userId,
-        encrypted_key: managedKey,  // TODO: Encrypt this
+        encrypted_key: wrapped,
         tier,
         is_active: true,
       });

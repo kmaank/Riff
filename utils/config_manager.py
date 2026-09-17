@@ -2,6 +2,7 @@
 import json
 import os
 import platform
+import threading
 import uuid
 from typing import Any
 
@@ -43,7 +44,7 @@ class ConfigManager:
         "onboarding_completed": False,
         "auth": {
             "supabase_url": "https://yrsviodciuepunofxoja.supabase.co",
-            "supabase_anon_key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inlyc3Zpb2RjaXVlcHVub2Z4b2phIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Mzk1OTY1ODksImV4cCI6MjA1NTE3MjU4OX0.7f_q_xbFZNOB3Gqk-PL78gQ2jEZ_CivfCk1n_JJsMbE"
+            "supabase_anon_key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inlyc3Zpb2RjaXVlcHVub2Z4b2phIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwOTk0MTIsImV4cCI6MjA4NzY3NTQxMn0.GBYQIn6A6TmcHjL75m8bTNbPXe2zCGH28jrxrOhnmo8"
         },
         "device": {
             "device_id": ""  # Auto-generated on first run
@@ -53,6 +54,7 @@ class ConfigManager:
     def __init__(self, config_path: str = None):
         self.config_path = config_path or self._get_default_path()
         self.config = {}
+        self._lock = threading.RLock()
         self._ensure_config_dir()
         self.load()
 
@@ -73,6 +75,10 @@ class ConfigManager:
         os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
 
     def load(self) -> dict:
+        with self._lock:
+            return self._load_unlocked()
+
+    def _load_unlocked(self) -> dict:
         if os.path.exists(self.config_path):
             try:
                 with open(self.config_path, 'r') as f:
@@ -95,10 +101,16 @@ class ConfigManager:
             print("[Config] Migrating deprecated model llama3-8b-8192 to llama-3.3-70b-versatile")
             self.set("api.llm_model", "llama-3.3-70b-versatile")
 
-        # Migration: Replace placeholder Supabase credentials with real ones
+        # Migration: Replace placeholder or rotated-invalid Supabase credentials
         auth = self.config.get("auth", {})
-        if "your-project" in auth.get("supabase_url", "") or "your-anon-key" in auth.get("supabase_anon_key", ""):
-            print("[Config] Migrating placeholder Supabase credentials to real project values")
+        stale_keys = (
+            "your-anon-key",
+            "7f_q_xbFZNOB3Gqk-PL78gQ2jEZ_CivfCk1n_JJsMbE",
+        )
+        key = auth.get("supabase_anon_key", "")
+        url = auth.get("supabase_url", "")
+        if "your-project" in url or any(s in key for s in stale_keys):
+            print("[Config] Migrating Supabase credentials to current project values")
             self.set("auth.supabase_url", self.DEFAULT_CONFIG["auth"]["supabase_url"])
             self.set("auth.supabase_anon_key", self.DEFAULT_CONFIG["auth"]["supabase_anon_key"])
 
@@ -110,6 +122,10 @@ class ConfigManager:
         return self.config
 
     def save(self, config: dict = None):
+        with self._lock:
+            self._save_unlocked(config)
+
+    def _save_unlocked(self, config: dict = None):
         if config:
             self.config = config
         
@@ -137,31 +153,33 @@ class ConfigManager:
                     pass
 
     def get(self, key: str, default: Any = None) -> Any:
-        keys = key.split('.')
-        value = self.config
-        
-        for k in keys:
-            if isinstance(value, dict) and k in value:
-                value = value[k]
-            else:
-                return default
-        return value
+        with self._lock:
+            keys = key.split('.')
+            value = self.config
+            
+            for k in keys:
+                if isinstance(value, dict) and k in value:
+                    value = value[k]
+                else:
+                    return default
+            return value
 
     def set(self, key: str, value: Any) -> None:
-        keys = key.split('.')
-        target = self.config
-        
-        for k in keys[:-1]:
-            if k not in target:
-                target[k] = {}
-            target = target[k]
-            if not isinstance(target, dict):
-                 # Smashed a non-dict value? recreate
-                 target = {}
-        
-        target[keys[-1]] = value
-        self.save()
-        return self.config
+        with self._lock:
+            keys = key.split('.')
+            target = self.config
+            
+            for k in keys[:-1]:
+                if k not in target:
+                    target[k] = {}
+                target = target[k]
+                if not isinstance(target, dict):
+                     # Smashed a non-dict value? recreate
+                     target = {}
+            
+            target[keys[-1]] = value
+            self._save_unlocked()
+            return self.config
 
     def get_api_key(self):
         return self.get("api.api_key")
@@ -173,45 +191,46 @@ class ConfigManager:
 
     def update_metrics(self, word_count: int, recording_seconds: float, style: str):
         """Update usage metrics after a successful transcription."""
-        from datetime import datetime, timedelta
+        from datetime import datetime
 
-        # Ensure metrics exist (for older configs)
-        if "metrics" not in self.config:
-            self.config["metrics"] = self.DEFAULT_CONFIG["metrics"].copy()
+        with self._lock:
+            # Ensure metrics exist (for older configs)
+            if "metrics" not in self.config:
+                self.config["metrics"] = self.DEFAULT_CONFIG["metrics"].copy()
 
-        metrics = self.config["metrics"]
+            metrics = self.config["metrics"]
 
-        # Check if we need to reset weekly count
-        today = datetime.now().date()
-        week_start_str = metrics.get("week_start_date", "")
+            # Check if we need to reset weekly count
+            today = datetime.now().date()
+            week_start_str = metrics.get("week_start_date", "")
 
-        if week_start_str:
-            try:
-                week_start = datetime.fromisoformat(week_start_str).date()
-                # If more than 7 days have passed, reset
-                if (today - week_start).days >= 7:
-                    metrics["this_week_riffs"] = 0
+            if week_start_str:
+                try:
+                    week_start = datetime.fromisoformat(week_start_str).date()
+                    # If more than 7 days have passed, reset
+                    if (today - week_start).days >= 7:
+                        metrics["this_week_riffs"] = 0
+                        metrics["week_start_date"] = today.isoformat()
+                except Exception:
+                    # Invalid date, reset
                     metrics["week_start_date"] = today.isoformat()
-            except:
-                # Invalid date, reset
+            else:
+                # First time, set week start
                 metrics["week_start_date"] = today.isoformat()
-        else:
-            # First time, set week start
-            metrics["week_start_date"] = today.isoformat()
 
-        # Update metrics
-        metrics["total_words"] = metrics.get("total_words", 0) + word_count
-        metrics["total_riffs"] = metrics.get("total_riffs", 0) + 1
-        metrics["total_recording_seconds"] = metrics.get("total_recording_seconds", 0) + recording_seconds
-        metrics["this_week_riffs"] = metrics.get("this_week_riffs", 0) + 1
+            # Update metrics
+            metrics["total_words"] = metrics.get("total_words", 0) + word_count
+            metrics["total_riffs"] = metrics.get("total_riffs", 0) + 1
+            metrics["total_recording_seconds"] = metrics.get("total_recording_seconds", 0) + recording_seconds
+            metrics["this_week_riffs"] = metrics.get("this_week_riffs", 0) + 1
 
-        # Track style usage
-        if "style_counts" not in metrics:
-            metrics["style_counts"] = {}
-        metrics["style_counts"][style] = metrics["style_counts"].get(style, 0) + 1
+            # Track style usage
+            if "style_counts" not in metrics:
+                metrics["style_counts"] = {}
+            metrics["style_counts"][style] = metrics["style_counts"].get(style, 0) + 1
 
-        self.config["metrics"] = metrics
-        self.save()
+            self.config["metrics"] = metrics
+            self._save_unlocked()
 
     def get_prompt(self, style):
         # 1. Check for user override in config.json

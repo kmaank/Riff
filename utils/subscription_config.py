@@ -35,11 +35,27 @@ TIER_LIMITS: Dict[str, TierLimits] = {
     ),
     "starter": TierLimits(
         riffs_limit=500,
-        seconds_limit=7200,  # 2 hours (in seconds)
+        seconds_limit=7200,
         all_styles=True,
         custom_prompts=False,
-        byok=False,          # Riff-managed key
+        byok=False,
         priority=False
+    ),
+    "monthly": TierLimits(
+        riffs_limit=None,
+        seconds_limit=None,
+        all_styles=True,
+        custom_prompts=True,
+        byok=False,
+        priority=True
+    ),
+    "yearly": TierLimits(
+        riffs_limit=None,
+        seconds_limit=None,
+        all_styles=True,
+        custom_prompts=True,
+        byok=False,
+        priority=True
     ),
     "pro": TierLimits(
         riffs_limit=None,    # Unlimited

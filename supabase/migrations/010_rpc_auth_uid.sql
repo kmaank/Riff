@@ -120,7 +120,7 @@ CREATE OR REPLACE FUNCTION public.get_user_history(
 )
 RETURNS TABLE (
     id UUID,
-    timestamp TEXT,
+    "timestamp" TEXT,
     original TEXT,
     refined TEXT,
     style TEXT,
@@ -136,7 +136,7 @@ BEGIN
     RETURN QUERY
     SELECT
         h.id,
-        h.timestamp,
+        h."timestamp",
         h.original,
         h.refined,
         h.style,
@@ -144,7 +144,7 @@ BEGIN
         h.device_id
     FROM public.riff_history h
     WHERE h.user_id = p_user_id
-    ORDER BY h.timestamp DESC
+    ORDER BY h."timestamp" DESC
     LIMIT LEAST(p_limit, 1000)
     OFFSET p_offset;
 END;
@@ -191,7 +191,7 @@ BEGIN
         WHERE id IN (
             SELECT id FROM public.riff_history
             WHERE user_id = p_user_id
-            ORDER BY timestamp ASC
+            ORDER BY "timestamp" ASC
             LIMIT (history_count - 1000)
         );
     END IF;
@@ -218,7 +218,7 @@ BEGIN
     FOR entry IN SELECT * FROM jsonb_array_elements(p_entries)
     LOOP
         INSERT INTO public.riff_history (
-            user_id, timestamp, original, refined, style, script_mode, device_id
+            user_id, "timestamp", original, refined, style, script_mode, device_id
         ) VALUES (
             p_user_id,
             entry->>'timestamp',
@@ -228,7 +228,7 @@ BEGIN
             entry->>'script_mode',
             entry->>'device_id'
         )
-        ON CONFLICT (user_id, timestamp) DO NOTHING;
+        ON CONFLICT (user_id, "timestamp") DO NOTHING;
         uploaded_count := uploaded_count + 1;
     END LOOP;
 
@@ -236,7 +236,7 @@ BEGIN
     WHERE id IN (
         SELECT id FROM public.riff_history
         WHERE user_id = p_user_id
-        ORDER BY timestamp ASC
+        ORDER BY "timestamp" ASC
         OFFSET 1000
     );
 

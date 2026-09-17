@@ -1,14 +1,17 @@
 // Edge Function: get-api-key
-// Returns decrypted managed Groq API key for paid users
-// Rate-limited to prevent abuse
+// Unwraps the managed Groq key for an active paid user.
+// The Mac caches the plaintext in RAM for 24h and calls Groq directly.
+// Ciphertext in Postgres is never readable without the server KEK.
 
-import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
-import { getSupabaseServiceClient, getUserId, corsHeaders } from '../_shared/clients.ts';
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { getSupabaseServiceClient, getUserId, corsHeaders } from "../_shared/clients.ts";
+import { isWrapped, unwrapApiKey, wrapApiKey } from "../_shared/crypto.ts";
+
+const LEASE_SECONDS = 24 * 60 * 60;
 
 serve(async (req) => {
-  // Handle CORS
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
   }
 
   try {
@@ -16,82 +19,90 @@ serve(async (req) => {
 
     if (!userId) {
       return new Response(
-        JSON.stringify({ error: 'Unauthorized' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: "Unauthorized" }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
     const supabase = getSupabaseServiceClient();
 
-    // Check subscription tier
     const { data: subscription, error: subError } = await supabase
-      .from('subscriptions')
-      .select('tier, status')
-      .eq('user_id', userId)
+      .from("subscriptions")
+      .select("tier, status")
+      .eq("user_id", userId)
       .single();
 
     if (subError || !subscription) {
       return new Response(
-        JSON.stringify({ error: 'Subscription not found' }),
-        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: "Subscription not found" }),
+        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
-    // Free tier users must provide their own key
-    if (subscription.tier === 'free') {
+    if (subscription.tier === "free") {
       return new Response(
-        JSON.stringify({ error: 'Managed keys not available for free tier' }),
-        { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: "Managed keys not available for free tier" }),
+        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
-    // Subscription must be active
-    if (subscription.status !== 'active') {
+    if (subscription.status !== "active") {
       return new Response(
-        JSON.stringify({ error: 'Subscription not active' }),
-        { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: "Subscription not active" }),
+        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
-    // Get API key
     const { data: apiKey, error: keyError } = await supabase
-      .from('api_keys')
-      .select('encrypted_key, is_active')
-      .eq('user_id', userId)
+      .from("api_keys")
+      .select("id, encrypted_key, is_active")
+      .eq("user_id", userId)
       .single();
 
     if (keyError || !apiKey) {
       return new Response(
-        JSON.stringify({ error: 'API key not found. Please contact support.' }),
-        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: "API key not found. Please contact support." }),
+        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
     if (!apiKey.is_active) {
       return new Response(
-        JSON.stringify({ error: 'API key is inactive. Please contact support.' }),
-        { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: "API key is inactive. Please contact support." }),
+        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
-    // TODO: Decrypt the encrypted_key using AES-256-GCM
-    // For now, return as-is (assumes keys are stored plaintext in dev)
-    // In production, use: const decryptedKey = await decrypt(apiKey.encrypted_key);
-    const decryptedKey = apiKey.encrypted_key;
+    let plaintext = await unwrapApiKey(apiKey.encrypted_key);
+
+    // Migrate any leftover plaintext rows to wrapped form.
+    if (!isWrapped(apiKey.encrypted_key)) {
+      try {
+        const wrapped = await wrapApiKey(plaintext);
+        await supabase
+          .from("api_keys")
+          .update({ encrypted_key: wrapped })
+          .eq("id", apiKey.id);
+      } catch (e) {
+        console.error("Failed to re-wrap stored key");
+      }
+    }
+
+    const expiresAt = new Date(Date.now() + LEASE_SECONDS * 1000).toISOString();
 
     return new Response(
-      JSON.stringify({ api_key: decryptedKey }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({
+        api_key: plaintext,
+        lease_seconds: LEASE_SECONDS,
+        expires_at: expiresAt,
+      }),
+      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
-
   } catch (error) {
-    console.error('Error in get-api-key:', error);
+    console.error("Error in get-api-key:", error?.message || error);
     return new Response(
-      JSON.stringify({ error: 'Internal server error', message: error.message }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({ error: "Internal server error" }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   }
 });
-
-// TODO: Implement proper encryption/decryption
-// import { decrypt } from '../_shared/crypto.ts';

@@ -27,7 +27,6 @@ def mock_config():
 def auth_manager(mock_config):
     """Create AuthManager with mocked config."""
     with patch('utils.auth_manager.httpx.Client'):
-        with patch('utils.auth_manager.keyring'):
             manager = AuthManager(mock_config)
             return manager
 
@@ -132,22 +131,36 @@ def test_get_effective_api_key_byok(auth_manager, mock_config):
 
 
 def test_get_effective_api_key_managed(auth_manager):
-    """Test get_effective_api_key for managed tier."""
-    with patch.object(auth_manager, 'get_tier', return_value='pro'):
-        api_key = auth_manager.get_effective_api_key()
+    """Paid tiers lease the managed Groq key instead of using BYOK."""
+    with patch.object(auth_manager, 'get_tier', return_value='monthly'):
+        with patch.object(auth_manager, '_fetch_managed_key', return_value='gsk_leased') as fetch:
+            api_key = auth_manager.get_effective_api_key()
 
-    assert api_key is None  # Proxy mode
+    assert api_key == "gsk_leased"
+    fetch.assert_called_once()
 
 
-def test_should_use_proxy(auth_manager):
-    """Test should_use_proxy for different tiers."""
-    # Free tier - should NOT use proxy
-    with patch.object(auth_manager, 'get_tier', return_value='free'):
-        assert auth_manager.should_use_proxy() is False
+def test_managed_key_stays_in_ram(auth_manager, tmp_path):
+    """Leased keys must not be written to session.json."""
+    auth_manager.session_path = tmp_path / "session.json"
+    auth_manager._write_session = MagicMock()
+    mock_response = Mock()
+    mock_response.raise_for_status = Mock()
+    mock_response.json.return_value = {
+        "api_key": "gsk_leased",
+        "lease_seconds": 86400,
+        "expires_at": "2099-01-01T00:00:00Z",
+    }
 
-    # Pro tier - should use proxy
-    with patch.object(auth_manager, 'get_tier', return_value='pro'):
-        assert auth_manager.should_use_proxy() is True
+    with patch.object(auth_manager, '_get_access_token', return_value='tok'):
+        with patch('utils.auth_manager.httpx.post', return_value=mock_response):
+            first = auth_manager._fetch_managed_key()
+            second = auth_manager._fetch_managed_key()
+
+    assert first == "gsk_leased"
+    assert second == "gsk_leased"
+    assert auth_manager._managed_key == "gsk_leased"
+    assert "gsk_leased" not in json.dumps(auth_manager._write_session.call_args_list)
 
 
 def test_log_usage_success(auth_manager):

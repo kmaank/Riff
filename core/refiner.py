@@ -131,8 +131,15 @@ class Refiner:
         if not api_key:
             raise RefinementError("API key is required")
         self.client = Groq(api_key=api_key)
+        self._api_key = api_key
         self.model = model
         logging.info(f"[Refiner] Init: Model={model}")
+
+    def update_api_key(self, api_key: str):
+        if not api_key or api_key == getattr(self, "_api_key", None):
+            return
+        self._api_key = api_key
+        self.client = Groq(api_key=api_key)
 
     def refine(self, text: str, style: str = "clean", prompt: str = None) -> str:
         """
