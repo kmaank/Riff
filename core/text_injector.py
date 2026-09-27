@@ -3,7 +3,6 @@ from pynput.keyboard import Controller, Key
 import pyperclip
 import time
 import platform
-import subprocess
 import threading
 
 class TextInjector:
@@ -11,13 +10,20 @@ class TextInjector:
         self.keyboard = Controller()
         self.use_clipboard = use_clipboard
         self.is_mac = platform.system() == "Darwin"
+        self.last_error = None
         logging.info(f"[Injector] Init: Clipboard={use_clipboard}, OS={platform.system()}")
 
     def inject(self, text: str) -> bool:
         if not text:
             return False
 
+        self.last_error = None
         logging.info(f"[Injector] Inserting {len(text)} chars...")
+
+        if not self.has_keyboard_focus():
+            logging.warning("[Injector] No focused text field — skipping paste")
+            self.last_error = "no_focus"
+            return False
 
         try:
             if len(text) > 5000:
@@ -32,9 +38,12 @@ class TextInjector:
                 ok = True
         except Exception as e:
             logging.error(f"[Injector] Failed: {e}", exc_info=True)
+            self.last_error = "paste_failed"
             return False
 
-        logging.info(f"[Injector] Done success={ok}")
+        if not ok:
+            self.last_error = self.last_error or "paste_failed"
+        logging.info(f"[Injector] Done success={ok} last_error={self.last_error}")
         return ok
 
     def type_text(self, text: str):
@@ -73,38 +82,59 @@ class TextInjector:
             if i < total_chunks - 1:
                 time.sleep(0.3)
 
+        self._restore_clipboard(old_clipboard, delay=0.2)
+        logging.info(f"[Injector] Chunked paste complete: {total_chunks} chunks pasted")
+        return True
+
+    def has_keyboard_focus(self) -> bool:
+        """True if some UI element is focused, or if we cannot tell (don't block paste)."""
+        if not self.is_mac:
+            return True
+        try:
+            from ApplicationServices import AXUIElementCreateSystemWide, AXUIElementCopyAttributeValue
+            system = AXUIElementCreateSystemWide()
+            result = AXUIElementCopyAttributeValue(system, "AXFocusedUIElement")
+            focused = None
+            err = 0
+            if isinstance(result, tuple):
+                if len(result) >= 2:
+                    err, focused = result[0], result[1]
+                elif result:
+                    focused = result[0]
+            else:
+                focused = result
+            if err not in (0, None) and focused is None:
+                logging.debug("[Injector] AX focus check err=%s — assuming focused", err)
+                return True
+            if focused is None:
+                logging.warning("[Injector] No focused UI element (err=%s) — pasting anyway", err)
+                return True
+            return True
+        except Exception as e:
+            logging.debug("[Injector] Focus check unavailable: %s", e)
+            return True
+
+    def _restore_clipboard(self, old_clipboard, delay=0.2):
         def restore():
-            time.sleep(0.8)
+            time.sleep(delay)
             try:
                 pyperclip.copy(old_clipboard)
             except Exception:
                 pass
 
         threading.Thread(target=restore, daemon=True, name="riff-clipboard-restore").start()
-        logging.info(f"[Injector] Chunked paste complete: {total_chunks} chunks pasted")
-        return True
 
     def _do_paste(self) -> bool:
-        """Helper method to perform a single paste operation."""
-        if self.is_mac:
-            try:
-                subprocess.run(["osascript", "-e", 'tell application "System Events" to keystroke "v" using command down'], check=True)
-                return True
-            except Exception as e:
-                logging.warning(f"[Injector] AppleScript paste failed: {e}")
-                try:
-                    with self.keyboard.pressed(Key.cmd):
-                        self.keyboard.press('v')
-                        self.keyboard.release('v')
-                    return True
-                except Exception as ex:
-                    logging.error(f"[Injector] Pynput paste failed: {ex}")
-                    return False
-        else:
-            with self.keyboard.pressed(Key.ctrl):
+        """Paste via the same Accessibility key events as the hotkey. Skip AppleScript."""
+        try:
+            modifier = Key.cmd if self.is_mac else Key.ctrl
+            with self.keyboard.pressed(modifier):
                 self.keyboard.press('v')
                 self.keyboard.release('v')
             return True
+        except Exception as e:
+            logging.error("[Injector] Paste failed: %s", e)
+            return False
 
     def inject_via_clipboard(self, text: str) -> bool:
         try:
@@ -116,15 +146,7 @@ class TextInjector:
         time.sleep(0.1)
 
         pasted = self._do_paste()
-
-        def restore():
-            time.sleep(0.8)
-            try:
-                pyperclip.copy(old_clipboard)
-            except Exception:
-                pass
-
-        threading.Thread(target=restore, daemon=True, name="riff-clipboard-restore").start()
+        self._restore_clipboard(old_clipboard, delay=0.2)
         return pasted
 
 def main():

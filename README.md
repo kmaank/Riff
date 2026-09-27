@@ -7,6 +7,8 @@ A desktop voice-to-text app that runs in the system tray. Press a hotkey → spe
 - Works in ANY app (Slack, Email, Code editor, Browser)
 - Powered by **your** Groq API key (Whisper + LLaMA). Paste it once after login; it is saved to your Riff account (encrypted) and restored on other devices.
 
+**Download for Mac:** [Riff 1.2.8](https://github.com/kmaank/Riff/releases/latest) — signed and notarized. Open the `.dmg`, drag Riff to Applications, then click the menu-bar icon to open Home.
+
 ---
 
 ## 🏗️ Building
@@ -59,11 +61,10 @@ python main.py
 ```
 
 ### Installing the built app (macOS):
-1. Download `Riff-macOS-dmg` from the latest [Actions run](../../actions)
-2. Open the `.dmg`
-3. Drag Riff to Applications
-4. Launch Riff — it appears in your system tray
-5. Set your Groq API key when prompted
+1. Download `Riff-1.2.8.dmg` from the latest [GitHub Release](https://github.com/kmaank/Riff/releases/latest)
+2. Open the `.dmg` and drag Riff to Applications
+3. Launch Riff — it appears in the menu bar (no Dock icon)
+4. Click the menu-bar icon → **Open Home** to sign in and paste your Groq key
 
 ---
 

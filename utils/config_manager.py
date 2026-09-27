@@ -2,9 +2,18 @@
 import json
 import os
 import platform
+import subprocess
 import threading
 import uuid
+import logging
 from typing import Any
+
+GROQ_CHAT_MODEL = "openai/gpt-oss-120b"
+DEPRECATED_CHAT_MODELS = {
+    "llama3-8b-8192",
+    "llama-3.1-8b-instant",
+    "llama-3.3-70b-versatile",
+}
 
 class ConfigManager:
     DEFAULT_CONFIG = {
@@ -27,11 +36,12 @@ class ConfigManager:
         "api": {
             "api_key": "",
             "whisper_model": "whisper-large-v3",
-            "llm_model": "llama-3.3-70b-versatile"
+            "llm_model": GROQ_CHAT_MODEL
         },
         "ui": {
-            "show_notifications": True,
-            "play_sounds": False
+            "show_notifications": False,
+            "play_sounds": False,
+            "theme": "system"
         },
         "metrics": {
             "total_words": 0,
@@ -39,7 +49,8 @@ class ConfigManager:
             "total_recording_seconds": 0,
             "this_week_riffs": 0,
             "week_start_date": "",  # ISO date for tracking weekly reset
-            "style_counts": {}  # Track usage per style
+            "style_counts": {},  # Track usage per style
+            "typing_wpm": 40
         },
         "onboarding_completed": False,
         "auth": {
@@ -71,6 +82,21 @@ class ConfigManager:
             
         return os.path.join(base, "Riff", "config.json")
 
+    def _hardware_device_id(self) -> str:
+        """Stable per-Mac id so wipes/reinstalls do not burn device slots."""
+        try:
+            out = subprocess.check_output(
+                ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+            for line in out.splitlines():
+                if "IOPlatformUUID" in line and '"' in line:
+                    return line.split('"')[3]
+        except Exception as e:
+            logging.warning("[Config] Hardware UUID unavailable: %s", e)
+        return str(uuid.uuid4())
+
     def _ensure_config_dir(self):
         os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
 
@@ -96,10 +122,11 @@ class ConfigManager:
             self.config = self.DEFAULT_CONFIG.copy()
             self.save()
         
-        # Migration: Check for deprecated models and update
-        if self.config.get("api", {}).get("llm_model") == "llama3-8b-8192":
-            print("[Config] Migrating deprecated model llama3-8b-8192 to llama-3.3-70b-versatile")
-            self.set("api.llm_model", "llama-3.3-70b-versatile")
+        # Migration: retired Groq chat models (llama-3.3-70b-versatile shut down 2026-08-16)
+        current_model = (self.config.get("api") or {}).get("llm_model", "")
+        if current_model in DEPRECATED_CHAT_MODELS:
+            logging.info("[Config] Migrating chat model %s -> %s", current_model, GROQ_CHAT_MODEL)
+            self.set("api.llm_model", GROQ_CHAT_MODEL)
 
         # Migration: Replace placeholder or rotated-invalid Supabase credentials
         auth = self.config.get("auth", {})
@@ -115,9 +142,11 @@ class ConfigManager:
             self.set("auth.supabase_anon_key", self.DEFAULT_CONFIG["auth"]["supabase_anon_key"])
 
         device = self.config.setdefault("device", {})
-        if not device.get("device_id"):
-            device["device_id"] = str(uuid.uuid4())
+        hardware_id = self._hardware_device_id()
+        if hardware_id and device.get("device_id") != hardware_id:
+            device["device_id"] = hardware_id
             self.save()
+            logging.info("[Config] Using stable hardware device_id")
             
         return self.config
 
@@ -166,6 +195,7 @@ class ConfigManager:
 
     def set(self, key: str, value: Any) -> None:
         with self._lock:
+            self._load_unlocked()
             keys = key.split('.')
             target = self.config
             
@@ -194,7 +224,9 @@ class ConfigManager:
         from datetime import datetime
 
         with self._lock:
-            # Ensure metrics exist (for older configs)
+            # Reload from disk first so a Swift style/script click is not overwritten
+            # by a stale in-memory config from the previous riff.
+            self._load_unlocked()
             if "metrics" not in self.config:
                 self.config["metrics"] = self.DEFAULT_CONFIG["metrics"].copy()
 
@@ -229,6 +261,9 @@ class ConfigManager:
                 metrics["style_counts"] = {}
             metrics["style_counts"][style] = metrics["style_counts"].get(style, 0) + 1
 
+            # Reload again so a Control Center style/script click during this
+            # update is not overwritten. Only the metrics key is written back.
+            self._load_unlocked()
             self.config["metrics"] = metrics
             self._save_unlocked()
 
@@ -263,6 +298,11 @@ class ConfigManager:
                 "Remove any abusive, aggressive, or slang language, replacing it with polite professional equivalents if necessary, or omitting it if irrelevant. "
                 "Ensure the tone is respectful, concise, and ready for a professional email or Slack message."
             ),
+            "riff": (
+                "You are a friendly AI assistant. The user is talking to you directly. "
+                "Respond naturally and helpfully to what they said. "
+                "Keep responses concise, conversational, and helpful."
+            ),
             "clean": (
                  "You are a dictation editor. Clean the following transcript. "
                  "REMOVE: filler words (um, uh, like, you know, basicially), repetitions, and hesitations. "
@@ -274,7 +314,10 @@ class ConfigManager:
             "code": "You are a coding assistant. Format the text as code comments or proper variable names (snake_case) depending on context.",
             "pirate": "You are a pirate. Arrr! Speak like one."
         }
-        prompt = prompts.get(style, prompts["casual"])
+        prompt = prompts.get(style)
+        if not prompt:
+            logging.warning("[Config] No get_prompt entry for style=%s", style)
+            return None
         
         # Universal strict boundary to prevent "Here is the transcript" chatter
         strict_instruction = (
@@ -283,6 +326,8 @@ class ConfigManager:
             "Just the text."
         )
         
+        if style == "riff":
+            return prompt
         return prompt + strict_instruction
 
 def main():

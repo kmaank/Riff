@@ -50,11 +50,7 @@ Signup failed HTTP 401: {"message":"Invalid API key","hint":"Double check your S
    Change **Site URL** from `http://localhost:3000` to `riff://` so the default fallback opens the app. (Required when `emailRedirectTo` isn’t applied, e.g. old templates.)
 
 3. **Email template**  
-   Go to **Authentication** → **Email Templates** → **Confirm signup**. Ensure the link uses `{{ .ConfirmationURL }}` (not `{{ .SiteURL }}`). Example:
-   ```html
-   <a href="{{ .ConfirmationURL }}">Confirm your mail</a>
-   ```
-   The `ConfirmationURL` variable includes the redirect; `SiteURL` does not.
+   Go to **Authentication** → **Email Templates** → **Confirm signup**. Use the Riff templates in `supabase/templates/` (or run `python3 supabase/apply_email_templates.py` with `SUPABASE_ACCESS_TOKEN`). The confirm button must use `{{ .ConfirmationURL }}`, not `{{ .SiteURL }}`.
 
 4. **Rebuild and retry**  
    Rebuild the app (`cd config_ui && bash build_ui.sh`), then sign up again with a new email.
@@ -141,4 +137,4 @@ Cloudflare is unable to establish an SSL connection to the origin server.
 
 ---
 
-**Logs**: Check `~/Documents/Riff/debug_auth.log` for detailed auth debugging.
+**Logs**: Tray menu → **Reveal Logs**, or open `~/Library/Application Support/Riff/logs`. Share `riff.log` (this session) plus `debug_auth.log` if login/onboarding failed. Do not share `config.json`.

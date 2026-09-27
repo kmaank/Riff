@@ -20,13 +20,14 @@ def mock_config():
         "api.api_key": "test-groq-key",
     }.get(key, default)
     config.config = {
-        "api": {"api_key": "test-groq-key"},
+        "api": {"api_key": "gsk_testkey"},
         "auth": {
             "supabase_url": "https://test-project.supabase.co",
             "supabase_anon_key": "test-anon-key",
         },
         "device": {},
     }
+    config.load = Mock(return_value=config.config)
     return config
 
 
@@ -88,51 +89,30 @@ def test_can_riff_not_authenticated(auth_manager):
     assert "Not authenticated" in reason
 
 
-def test_can_riff_quota_exceeded(auth_manager):
-    """Test can_riff when quota is exceeded."""
+def test_can_riff_no_key(auth_manager):
+    """BYOK: signed in without a Groq key cannot riff."""
+    auth_manager.config.config["api"]["api_key"] = ""
     with patch.object(auth_manager, 'is_authenticated', True):
-        with patch.object(auth_manager, 'validate_subscription') as mock_validate:
-            mock_validate.return_value = {
-                "valid": False,
-                "tier": "free",
-                "status": "active",
-                "quota": {
-                    "riffs_limit": 100,
-                    "riffs_used": 100,
-                    "seconds_limit": None,
-                    "seconds_used": 0,
-                }
-            }
+        with patch.object(auth_manager, 'sync_byok_key', return_value=None):
             allowed, reason = auth_manager.can_riff()
 
     assert allowed is False
+    assert "Groq" in reason
 
 
 def test_can_riff_allowed(auth_manager):
-    """Test can_riff when user is allowed."""
+    """BYOK: signed in with a Groq key can riff (no Stripe quota)."""
     with patch.object(auth_manager, 'is_authenticated', True):
-        with patch.object(auth_manager, 'validate_subscription') as mock_validate:
-            mock_validate.return_value = {
-                "valid": True,
-                "tier": "pro",
-                "status": "active",
-                "quota": {
-                    "riffs_limit": None,
-                    "riffs_used": 50,
-                    "seconds_limit": None,
-                    "seconds_used": 1000,
-                }
-            }
-            allowed, reason = auth_manager.can_riff()
+        allowed, reason = auth_manager.can_riff()
 
     assert allowed is True
-    assert reason == ""
+    assert reason == "OK"
 
 
 def test_get_effective_api_key_byok(auth_manager, mock_config):
     """Local BYOK key is used for Groq."""
     api_key = auth_manager.get_effective_api_key()
-    assert api_key == "test-groq-key"
+    assert api_key == "gsk_testkey"
 
 
 def test_sync_byok_key_restores_from_cloud(auth_manager):
@@ -140,6 +120,7 @@ def test_sync_byok_key_restores_from_cloud(auth_manager):
     auth_manager.config.set = Mock()
     mock_response = Mock()
     mock_response.status_code = 200
+    mock_response.content = b'{"api_key":"gsk_from_account"}'
     mock_response.raise_for_status = Mock()
     mock_response.json.return_value = {"api_key": "gsk_from_account"}
 

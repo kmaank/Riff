@@ -14,8 +14,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple
 
-from utils.subscription_config import get_tier_features
-
 logger = logging.getLogger(__name__)
 
 AUTH_EMAIL_REDIRECT = "riff://auth/callback"
@@ -391,39 +389,21 @@ class AuthManager:
     
     def can_riff(self) -> Tuple[bool, str]:
         """
-        Check if user can create a riff (quota check)
-        Returns: (allowed: bool, reason: str)
+        BYOK: a signed-in user with a Groq key can riff. No Stripe quota gate.
         """
         if not self.is_authenticated:
+            logger.warning("[Auth] can_riff=false reason=not_authenticated")
             return False, "Not authenticated"
-        
-        subscription = self.validate_subscription()
-        
-        if subscription.get("error"):
-            return False, subscription["error"]
-        
-        if subscription.get("status") != "active":
-            return False, "Subscription not active"
-        
-        # Check quota
-        quota = subscription.get("quota", {})
-        tier = subscription.get("tier", "free")
-        features = get_tier_features(tier)
-        
-        # Check riff limit
-        if features.riffs_limit is not None:
-            riffs_used = quota.get("riffs_used", 0)
-            if riffs_used >= features.riffs_limit:
-                return False, f"Monthly riff limit reached ({features.riffs_limit})"
-        
-        # Check recording time limit
-        if features.seconds_limit is not None:
-            seconds_used = quota.get("seconds_used", 0)
-            if seconds_used >= features.seconds_limit:
-                hours = features.seconds_limit / 3600
-                return False, f"Monthly recording time limit reached ({hours:.1f} hours)"
-        
-        return True, "OK"
+
+        key = self.get_effective_api_key()
+        if not key:
+            key = self.sync_byok_key()
+        if key and key.startswith("gsk_"):
+            logger.info("[Auth] can_riff=true (BYOK key present)")
+            return True, "OK"
+
+        logger.warning("[Auth] can_riff=false reason=no_groq_key")
+        return False, "Add your Groq API key in Settings"
     
     def get_tier(self) -> str:
         """Get current subscription tier"""
@@ -473,31 +453,47 @@ class AuthManager:
     
     def get_effective_api_key(self) -> Optional[str]:
         """User's BYOK Groq key from local config (restored from the account on login)."""
-        key = (self.config.config.get("api", {}) or {}).get("api_key", "") or ""
-        return key if key.startswith("gsk_") else (key or None)
+        try:
+            self.config.load()
+        except Exception as e:
+            logger.warning("[Auth] Could not reload config for API key: %s", e)
+        key = ((self.config.config.get("api", {}) or {}).get("api_key", "") or "").strip()
+        if key.startswith("gsk_"):
+            return key
+        return None
 
     def sync_byok_key(self) -> Optional[str]:
         """
         Account is the source of truth. Pull the wrapped key after login;
         if this device has a key and the account does not, push it up.
         """
-        local = (self.config.config.get("api", {}) or {}).get("api_key", "") or ""
+        local = ((self.config.config.get("api", {}) or {}).get("api_key", "") or "").strip()
         cloud = self._fetch_cloud_groq_key()
         if cloud:
             if cloud != local:
+                if local.startswith("gsk_") and len(local) >= 40 and len(local) >= len(cloud):
+                    logger.info("[Auth] Keeping longer local Groq key and uploading it")
+                    self._save_cloud_groq_key(local)
+                    return local
                 try:
                     self.config.set("api.api_key", cloud)
+                    logger.info("[Auth] Restored Groq key from account into local config")
                 except Exception as e:
                     logger.error("[Auth] Failed to write restored Groq key: %s", e)
-            return cloud
+            else:
+                logger.info("[Auth] Account Groq key matches local copy")
+            return cloud if not (local.startswith("gsk_") and len(local) >= 40) else local
         if local.startswith("gsk_"):
+            logger.info("[Auth] No cloud key; uploading local Groq key to account")
             self._save_cloud_groq_key(local)
             return local
+        logger.info("[Auth] No Groq key locally or on account")
         return None
 
     def _fetch_cloud_groq_key(self) -> Optional[str]:
         access_token = self._get_access_token()
         if not access_token:
+            logger.info("[Auth] get-api-key skipped: no access token")
             return None
         url = f"{self.supabase_url}/functions/v1/get-api-key"
         headers = {
@@ -506,11 +502,14 @@ class AuthManager:
         }
         try:
             response = httpx.post(url, headers=headers, json={}, timeout=10.0)
+            logger.info("[Auth] get-api-key status=%s bytes=%s", response.status_code, len(response.content))
             if response.status_code == 404:
                 return None
             response.raise_for_status()
             api_key = response.json().get("api_key") or ""
-            return api_key if api_key.startswith("gsk_") else None
+            has_key = api_key.startswith("gsk_")
+            logger.info("[Auth] get-api-key validKey=%s", has_key)
+            return api_key if has_key else None
         except httpx.HTTPError as e:
             logger.error("[Auth] Failed to fetch account Groq key: %s", e)
             return None
@@ -518,6 +517,8 @@ class AuthManager:
     def _save_cloud_groq_key(self, api_key: str) -> bool:
         access_token = self._get_access_token()
         if not access_token or not api_key.startswith("gsk_"):
+            logger.info("[Auth] save-groq-key skipped: token=%s keyPrefixOk=%s",
+                        bool(access_token), api_key.startswith("gsk_") if api_key else False)
             return False
         url = f"{self.supabase_url}/functions/v1/save-groq-key"
         headers = {
@@ -527,6 +528,7 @@ class AuthManager:
         }
         try:
             response = httpx.post(url, headers=headers, json={"api_key": api_key}, timeout=10.0)
+            logger.info("[Auth] save-groq-key status=%s", response.status_code)
             response.raise_for_status()
             logger.info("[Auth] Groq key saved to account")
             return True
@@ -697,6 +699,21 @@ class AuthManager:
             httpx.post(url, headers=headers, json=body, timeout=15.0)
         except Exception as e:
             logger.warning("[Auth] history upload failed: %s", e)
+
+    def delete_history_entry(self, timestamp: str) -> None:
+        headers = self._auth_headers()
+        if not headers or not timestamp:
+            return
+        url = f"{self.supabase_url}/rest/v1/riff_history"
+        try:
+            httpx.delete(
+                url,
+                headers={**headers, "Prefer": "return=minimal"},
+                params={"timestamp": f"eq.{timestamp}"},
+                timeout=15.0,
+            )
+        except Exception as e:
+            logger.warning("[Auth] history delete failed: %s", e)
 
     def download_history(self) -> list:
         headers = self._auth_headers()

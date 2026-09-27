@@ -1,32 +1,48 @@
 import SwiftUI
 
 struct HelpView: View {
+    @EnvironmentObject var settings: SettingsManager
+
+    private var keycap: String {
+        RiffHotkey.keycap(settings.config.hotkey.combination)
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text("How to Riff")
-                    .font(.title2)
-                    .bold()
-                    .padding(.bottom, 10)
-                
-                Group {
-                    HelpSection(icon: "mic.fill", title: "1. Speak", bodyText: "Hold your **Trigger Key** (Default: F8). Speak naturally. Riff listens while you hold.")
-                    HelpSection(icon: "brain.head.profile", title: "2. Think", bodyText: "Release the key. Riff processes your audio using Groq + Llama 3 for super-fast, context-aware logical refinement.")
-                    HelpSection(icon: "text.cursor", title: "3. Type", bodyText: "Riff types the refined text directly into your active window. No pasting required.")
+                Text("How to riff")
+                    .font(RiffType.h1)
+                    .foregroundColor(RiffTheme.ink)
+                HStack(spacing: 8) {
+                    Text("Hold")
+                        .font(RiffType.body)
+                        .foregroundColor(RiffTheme.inkMuted)
+                    RiffKeyCap(text: keycap)
+                    Text("speak, release. Riff types into whatever you're looking at.")
+                        .font(RiffType.body)
+                        .foregroundColor(RiffTheme.inkMuted)
                 }
-                
-                Divider().padding(.vertical)
-                
-                Text("Tips & Tricks")
-                    .font(.headline)
-                
                 VStack(alignment: .leading, spacing: 12) {
-                    TipRow(text: "**Context Aware:** Riff sees what app you are using and adapts. Coding in VS Code? It formats as code.")
-                    TipRow(text: "**Latch Mode:** Hold **Shift + Trigger** to start a long recording session without holding the key. Tap Trigger again to stop.")
-                    TipRow(text: "**Styles:** Use the **Style** tab to force specific personalities like 'Pirate' or 'Formal'.")
+                    tip("1. Hold and speak", "Keep talking until you're done. A small timer appears near the top of the screen.")
+                    tip("2. Release", "Casual pastes what Whisper heard. Clean, Formal, and Riff take a moment to rewrite.")
+                    tip("3. Riff pastes", "The words land in the text field you clicked. If nothing is selected, click a field first.")
+                    tip("Latch", "Hold Shift with your key to lock recording. Press the key again when you're done.")
+                    tip("Open Home", "Riff has no Dock icon. Click the Riff icon in the menu bar, then Open Home.")
                 }
             }
-            .padding(30)
+            .padding(RiffTheme.space6)
+        }
+        .background(RiffTheme.surface000)
+    }
+
+    private func tip(_ title: String, _ bodyText: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(RiffType.h2)
+                .foregroundColor(RiffTheme.ink)
+            Text(bodyText)
+                .font(RiffType.bodySM)
+                .foregroundColor(RiffTheme.inkMuted)
         }
     }
 }
@@ -35,21 +51,11 @@ struct HelpSection: View {
     let icon: String
     let title: String
     let bodyText: String
-    
+
     var body: some View {
-        HStack(alignment: .top, spacing: 15) {
-            Image(systemName: icon)
-                .font(.title)
-                .frame(width: 30)
-                .foregroundStyle(.orange)
-            
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.headline)
-                Text(.init(bodyText)) // Markdown init
-                    .foregroundStyle(.secondary)
-                    .font(.body)
-            }
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(RiffType.h2).foregroundColor(RiffTheme.ink)
+            Text(.init(bodyText)).font(RiffType.bodySM).foregroundColor(RiffTheme.inkMuted)
         }
     }
 }
@@ -57,11 +63,8 @@ struct HelpSection: View {
 struct TipRow: View {
     let text: String
     var body: some View {
-        HStack(alignment: .top) {
-            Image(systemName: "lightbulb.fill")
-                .foregroundStyle(.yellow)
-            Text(.init(text))
-                .foregroundStyle(.secondary)
-        }
+        Text(.init(text))
+            .font(RiffType.bodySM)
+            .foregroundColor(RiffTheme.inkMuted)
     }
 }

@@ -5,6 +5,7 @@ import queue
 import time
 import os
 import logging
+from collections import deque
 
 class AudioRecorderError(Exception):
     """Raised when recording fails."""
@@ -19,13 +20,19 @@ class AudioRecorder:
         self.audio_queue = queue.Queue()
         self.frames = []
         self.stream = None
-        self._lock = threading.Lock()  # Thread safety for state changes
+        self._lock = threading.RLock()  # Re-entrant: stop_recording may call cleanup
         
         # VAD Settings
         self.silence_threshold_ms = silence_threshold_ms
         self.energy_threshold = energy_threshold
         self.silence_start_time = None
         self.on_auto_stop = None
+        self._levels_lock = threading.Lock()
+        self._recent_levels = deque([0.0] * 22, maxlen=22)
+        self._latest_rms = 0.0
+        self.peak_rms = 0.0
+        self._level_peak = 0.0
+        self._level_last_emit = 0.0
         logging.info(f"[AudioRecorder] Init: {sample_rate}Hz, {channels}ch, VAD Thresh={energy_threshold}")
 
     def _sounddevice(self):
@@ -50,11 +57,21 @@ class AudioRecorder:
             
         data = indata.copy()
         self.audio_queue.put(data)
-        
+
+        energy = self.calculate_energy(data)
+        with self._levels_lock:
+            self._latest_rms = float(energy)
+            if energy > self.peak_rms:
+                self.peak_rms = float(energy)
+            self._level_peak = max(self._level_peak, float(energy))
+            now = time.time()
+            if now - self._level_last_emit >= 0.045:
+                self._recent_levels.append(self._level_peak)
+                self._level_peak = 0.0
+                self._level_last_emit = now
+
         # VAD Check (only if callback provided)
         if self.on_auto_stop:
-            energy = self.calculate_energy(data)
-            
             if energy > self.energy_threshold:
                 # Speech detected - reset silence timer
                 self.silence_start_time = None
@@ -69,6 +86,11 @@ class AudioRecorder:
                         # Call auto-stop in a separate thread to avoid blocking callback
                         threading.Thread(target=self.on_auto_stop, daemon=True).start()
                         self.silence_start_time = None  # Reset to prevent multiple triggers
+
+    def snapshot_levels(self):
+        """Recent RMS values for the recording HUD. Returns (levels, latest)."""
+        with self._levels_lock:
+            return list(self._recent_levels), float(self._latest_rms)
 
     def start_recording(self, on_auto_stop=None):
         """Start audio recording. Returns True on success, raises AudioRecorderError on failure."""
@@ -92,6 +114,12 @@ class AudioRecorder:
                 self.audio_queue = queue.Queue()
                 self.silence_start_time = None
                 self.on_auto_stop = on_auto_stop
+                with self._levels_lock:
+                    self._recent_levels = deque([0.0] * 22, maxlen=22)
+                    self._latest_rms = 0.0
+                    self.peak_rms = 0.0
+                    self._level_peak = 0.0
+                    self._level_last_emit = 0.0
                 
                 sd = self._sounddevice()
                 sd.default.samplerate = self.sample_rate
@@ -133,76 +161,90 @@ class AudioRecorder:
 
             logging.info("[AudioRecorder] Stopping recording...")
             self.recording = False
-            
-            # Stop stream with timeout protection
-            stream_closed = self._close_stream_with_timeout(timeout)
-            if not stream_closed:
-                logging.error("[AudioRecorder] Stream close timed out - forcing cleanup")
-                self._force_cleanup()
-            
-            # Collect data from queue
+            stream_to_close = self.stream
+            self.stream = None
+
+            queued = self.audio_queue.qsize()
+            logging.info("[AudioRecorder] Draining audio queue: approx %s blocks", queued)
             try:
                 while not self.audio_queue.empty():
                     try:
                         self.frames.append(self.audio_queue.get_nowait())
                     except queue.Empty:
                         break
-                    
+
                 if not self.frames:
                     logging.warning("[AudioRecorder] No audio captured.")
+                    self._close_stream_object(stream_to_close, timeout)
                     raise AudioRecorderError("No audio data captured")
 
-                # Save file
                 audio_data = np.concatenate(self.frames, axis=0)
-                
-                # Check minimum duration (0.3 seconds = 4800 samples at 16kHz)
+
                 min_samples = int(self.sample_rate * 0.3)
                 if len(audio_data) < min_samples:
                     logging.warning(f"[AudioRecorder] Audio too short ({len(audio_data)} samples)")
+                    self._close_stream_object(stream_to_close, timeout)
                     raise AudioRecorderError("Recording too short")
-                
+
                 audio_int16 = (audio_data * 32767).astype(np.int16)
                 wavfile.write(filename, self.sample_rate, audio_int16)
-                
+
                 duration = len(audio_data) / self.sample_rate
                 file_size = os.path.getsize(filename)
-                logging.info(f"[AudioRecorder] Recording saved: {duration:.2f}s, {file_size} bytes to {filename}")
-                
-                return True
-                
+                rms = float(np.sqrt(np.mean(audio_data ** 2)))
+                peak = float(np.max(np.abs(audio_data)))
+                logging.info(
+                    "[AudioRecorder] Recording saved: %.2fs, %s bytes, frames=%s, rms=%.5f, peak=%.5f, path=%s",
+                    duration, file_size, len(self.frames), rms, peak, filename
+                )
+                if duration > 60:
+                    logging.info(
+                        "[AudioRecorder] LONG RECORDING: %.1f min — chunking/watchdog should extend",
+                        duration / 60.0
+                    )
+
             except AudioRecorderError:
-                raise  # Re-raise our custom errors
+                raise
             except Exception as e:
                 logging.error(f"[AudioRecorder] Error saving file: {e}", exc_info=True)
+                self._close_stream_object(stream_to_close, timeout)
                 raise AudioRecorderError(f"Failed to save recording: {e}")
 
-    def _close_stream_with_timeout(self, timeout):
-        """Close stream with timeout protection. Returns True if closed successfully."""
-        if not self.stream:
+        # Close PortAudio after the WAV is on disk so a hung abort cannot delay paste.
+        self._close_stream_object(stream_to_close, timeout)
+        return True
+
+    def _close_stream_object(self, stream, timeout):
+        """Close a PortAudio stream without holding the recorder lock."""
+        if not stream:
             return True
-            
+
         def close_stream():
             try:
-                self.stream.abort()
+                stream.abort()
             except Exception as e:
                 logging.warning(f"[AudioRecorder] Stream abort failed: {e}")
             try:
-                self.stream.close()
+                stream.close()
             except Exception as e:
                 logging.warning(f"[AudioRecorder] Stream close failed: {e}")
-            self.stream = None
-        
-        # Run close in a thread with timeout
+
         close_thread = threading.Thread(target=close_stream, daemon=True)
         close_thread.start()
         close_thread.join(timeout=timeout)
-        
+
         if close_thread.is_alive():
-            logging.error("[AudioRecorder] Stream close timed out!")
+            logging.warning("[AudioRecorder] Stream close still running after %.1fs — continuing", timeout)
             return False
-        
+
         logging.info("[AudioRecorder] Stream closed.")
         return True
+
+    def _close_stream_with_timeout(self, timeout):
+        """Close self.stream with timeout protection. Returns True if closed successfully."""
+        stream = self.stream
+        self.stream = None
+        return self._close_stream_object(stream, timeout)
 
     def _force_cleanup(self):
         """Force cleanup of all state without waiting. Thread-safe."""

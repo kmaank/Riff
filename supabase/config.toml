@@ -32,5 +32,21 @@ enable_signup = true
 double_confirm_changes = false
 enable_confirmations = true
 
+[auth.email.template.confirmation]
+subject = "Confirm your Riff email"
+content_path = "./templates/confirmation.html"
+
+[auth.email.template.recovery]
+subject = "Reset your Riff password"
+content_path = "./templates/recovery.html"
+
+[auth.email.template.magic_link]
+subject = "Your Riff sign-in link"
+content_path = "./templates/magic_link.html"
+
+[auth.email.template.email_change]
+subject = "Confirm your new Riff email"
+content_path = "./templates/email_change.html"
+
 # Edge Functions
 [functions]

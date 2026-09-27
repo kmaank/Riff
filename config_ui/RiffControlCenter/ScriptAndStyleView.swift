@@ -2,49 +2,45 @@ import SwiftUI
 
 struct ScriptAndStyleView: View {
     @EnvironmentObject var settings: SettingsManager
-    @EnvironmentObject var authManager: SwiftAuthManager
+    @State private var wpmDraft = ""
+    @FocusState private var wpmFocused: Bool
 
     let modes = [
         ("english_mixed", "English Mixed", "Recommended"),
         ("english_translated", "English Translated", ""),
         ("original_mixed", "Original Mixed", "")
     ]
-
-    let styles = ["clean", "formal", "casual", "riff"]
-
-    // Phase 3: Check if style is allowed for current tier
-    private func isStyleAllowed(_ style: String) -> Bool {
-        return true
-    }
+    let styles = ["casual", "clean", "formal", "riff"]
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 40) {
-                // Metrics Section
-                if let metrics = settings.config.metrics {
-                    MetricsView(metrics: metrics)
+            VStack(alignment: .leading, spacing: 28) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Dictation")
+                        .font(RiffType.h2)
+                        .foregroundColor(RiffTheme.ink)
+                    Text("Casual types the raw transcript. The other styles rewrite it.")
+                        .font(RiffType.bodySM)
+                        .foregroundColor(RiffTheme.inkMuted)
                 }
 
-                // Script Mode Section
-                VStack(alignment: .leading, spacing: 20) {
-                    Text("Script Mode")
-                        .font(.title2)
-                        .bold()
-
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Script mode")
+                        .font(RiffType.h2)
+                        .foregroundColor(RiffTheme.ink)
                     Text("Choose how Riff handles multilingual dictation and code-switching (like Hinglish, Spanglish, Benglish).")
-                        .foregroundStyle(.secondary)
-
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 15) {
-                        ForEach(modes, id: \.0) { mode in
+                        .font(RiffType.bodySM)
+                        .foregroundColor(RiffTheme.inkMuted)
+                    HStack(alignment: .top, spacing: 12) {
+                        ForEach(Array(modes.enumerated()), id: \.element.0) { index, mode in
                             ScriptModeCard(
+                                index: String(format: "%02d", index + 1),
                                 mode: mode.0,
                                 title: mode.1,
                                 badge: mode.2,
                                 isSelected: settings.config.script_mode.active_mode == mode.0,
                                 action: {
-                                    var newConfig = settings.config
-                                    newConfig.script_mode.active_mode = mode.0
-                                    settings.config = newConfig
+                                    settings.config.script_mode.active_mode = mode.0
                                     settings.saveConfig()
                                 }
                             )
@@ -52,133 +48,73 @@ struct ScriptAndStyleView: View {
                     }
                 }
 
-                Divider()
-
-                // Style Section
-                VStack(alignment: .leading, spacing: 20) {
-                    Text("Transcription Style")
-                        .font(.title2)
-                        .bold()
-
-                    Text("Choose the default personality for your Riffs.")
-                        .foregroundStyle(.secondary)
-
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 140))], spacing: 15) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Transcription style")
+                        .font(RiffType.h2)
+                        .foregroundColor(RiffTheme.ink)
+                    Text("Casual pastes Whisper as-is. Clean, Formal, and Riff still run a Groq rewrite.")
+                        .font(RiffType.bodySM)
+                        .foregroundColor(RiffTheme.inkMuted)
+                    HStack(spacing: 12) {
                         ForEach(styles, id: \.self) { style in
                             StyleCard(
                                 style: style,
                                 isSelected: settings.config.style.active_style == style,
-                                isLocked: !isStyleAllowed(style),
                                 action: {
-                                    if isStyleAllowed(style) {
-                                        settings.config.style.active_style = style
-                                        settings.saveConfig()
-                                    }
+                                    settings.config.style.active_style = style
+                                    settings.saveConfig()
                                 }
                             )
                         }
                     }
                 }
 
-                Spacer()
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Typing speed")
+                        .font(RiffType.h2)
+                        .foregroundColor(RiffTheme.ink)
+                    Text("Used only for Time saved: words ÷ this WPM − minutes spoken. Default 40.")
+                        .font(RiffType.bodySM)
+                        .foregroundColor(RiffTheme.inkMuted)
+                    HStack(spacing: 8) {
+                        TextField("40", text: $wpmDraft)
+                        .textFieldStyle(.plain)
+                        .font(RiffType.num)
+                        .foregroundColor(RiffTheme.ink)
+                        .frame(width: 64, height: 32)
+                        .padding(.horizontal, 8)
+                        .background(RiffTheme.surface200)
+                        .overlay(RoundedRectangle(cornerRadius: RiffTheme.radiusXS).stroke(RiffTheme.lineStrong, lineWidth: 1))
+                        .focused($wpmFocused)
+                        .onSubmit { commitWPM() }
+                        .onChange(of: wpmFocused) { focused in
+                            if !focused { commitWPM() }
+                        }
+                        .onAppear { wpmDraft = String(settings.config.metrics?.typing_wpm ?? 40) }
+                        Text("WPM").font(RiffType.num).foregroundColor(RiffTheme.inkMuted)
+                    }
+                }
             }
-            .padding(30)
+            .padding(RiffTheme.space6)
         }
+        .background(RiffTheme.surface000)
+    }
+
+    private func commitWPM() {
+        let parsed = Int(wpmDraft.filter(\.isNumber)) ?? settings.config.metrics?.typing_wpm ?? 40
+        let wpm = max(10, min(parsed, 200))
+        wpmDraft = String(wpm)
+        if settings.config.metrics == nil {
+            settings.config.metrics = MetricsConfig(typing_wpm: wpm)
+        } else {
+            settings.config.metrics?.typing_wpm = wpm
+        }
+        settings.saveConfig()
+        settings.loadStats()
     }
 }
 
-// MARK: - Metrics View
 struct MetricsView: View {
     let metrics: MetricsConfig
-
-    var totalMinutes: Double {
-        metrics.total_recording_seconds / 60.0
-    }
-
-    var favoriteStyle: String {
-        guard !metrics.style_counts.isEmpty else { return "N/A" }
-        let sorted = metrics.style_counts.sorted { $0.value > $1.value }
-        return sorted.first?.key.capitalized ?? "N/A"
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 15) {
-            Text("Your Riff Stats")
-                .font(.title2)
-                .bold()
-
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                MetricCard(
-                    icon: "text.word.spacing",
-                    value: formatNumber(metrics.total_words),
-                    label: "Words",
-                    color: .blue
-                )
-
-                MetricCard(
-                    icon: "clock.fill",
-                    value: String(format: "%.1f", totalMinutes),
-                    label: "Minutes",
-                    color: .green
-                )
-
-                MetricCard(
-                    icon: "waveform",
-                    value: "\(metrics.total_riffs)",
-                    label: "Total Riffs",
-                    color: .orange
-                )
-
-                MetricCard(
-                    icon: "calendar",
-                    value: "\(metrics.this_week_riffs)",
-                    label: "This Week",
-                    color: .purple
-                )
-            }
-        }
-    }
-
-    func formatNumber(_ num: Int) -> String {
-        if num >= 1_000_000 {
-            return String(format: "%.1fM", Double(num) / 1_000_000.0)
-        } else if num >= 1_000 {
-            return String(format: "%.1fK", Double(num) / 1_000.0)
-        } else {
-            return "\(num)"
-        }
-    }
-}
-
-struct MetricCard: View {
-    let icon: String
-    let value: String
-    let label: String
-    let color: Color
-
-    var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: icon)
-                .font(.system(size: 24))
-                .foregroundStyle(color)
-
-            Text(value)
-                .font(.title)
-                .fontWeight(.bold)
-                .foregroundStyle(.primary)
-
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 20)
-        .padding(.horizontal, 12)
-        .background(Color.gray.opacity(0.08))
-        .cornerRadius(12)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.gray.opacity(0.15), lineWidth: 1)
-        )
-    }
+    var body: some View { RiffStatStrip(metrics: metrics) }
 }

@@ -36,6 +36,7 @@ class SwiftAuthManager: ObservableObject {
     private let authStatePath: URL
     private let riffDir: URL
     private static let planSelectionKey = "riff_needs_plan_selection"
+    private var lastAuthFingerprint: String = ""
 
     var isPaidPlan: Bool {
         managedKeyAvailable || (subscriptionTier != "free" && !subscriptionTier.isEmpty)
@@ -652,21 +653,25 @@ class SwiftAuthManager: ObservableObject {
 
     func syncGroqKeyWithCloud(localKey: String) async -> String {
         let trimmed = localKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        AuthLogger.log("[Onboarding] syncGroqKeyWithCloud localHasKey=\(trimmed.hasPrefix("gsk_"))")
         if let cloud = await fetchCloudGroqKey(), cloud.hasPrefix("gsk_") {
             writeLocalApiKey(cloud)
-            AuthLogger.log("Restored Groq key from account")
+            AuthLogger.log("[Onboarding] Restored Groq key from account (prefix=\(cloud.prefix(7)))")
             return cloud
         }
         if trimmed.hasPrefix("gsk_") {
+            AuthLogger.log("[Onboarding] No cloud key; pushing local key to account")
             await saveCloudGroqKey(trimmed)
             return trimmed
         }
+        AuthLogger.log("[Onboarding] No Groq key locally or on account")
         return ""
     }
 
     func fetchCloudGroqKey() async -> String? {
         guard let token = currentAccessToken(),
               let url = URL(string: "\(supabaseUrl)/functions/v1/get-api-key") else {
+            AuthLogger.log("fetchCloudGroqKey skipped: missing token or URL")
             return nil
         }
         var request = URLRequest(url: url)
@@ -679,13 +684,19 @@ class SwiftAuthManager: ObservableObject {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            if status == 404 { return nil }
+            let bytes = data.count
+            if status == 404 {
+                AuthLogger.log("fetchCloudGroqKey status=404 (no key on account)")
+                return nil
+            }
             guard status == 200,
                   let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let key = obj["api_key"] as? String,
                   key.hasPrefix("gsk_") else {
+                AuthLogger.log("fetchCloudGroqKey status=\(status) bytes=\(bytes) validKey=false")
                 return nil
             }
+            AuthLogger.log("fetchCloudGroqKey status=200 validKey=true prefix=\(key.prefix(7))")
             return key
         } catch {
             AuthLogger.log("fetchCloudGroqKey failed: \(error.localizedDescription)")
@@ -695,9 +706,13 @@ class SwiftAuthManager: ObservableObject {
 
     func saveCloudGroqKey(_ key: String) async {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasPrefix("gsk_"),
-              let token = currentAccessToken(),
+        guard trimmed.hasPrefix("gsk_"), trimmed.count >= 40 else {
+            AuthLogger.log("saveCloudGroqKey skipped: key is not a full gsk_ token")
+            return
+        }
+        guard let token = currentAccessToken(),
               let url = URL(string: "\(supabaseUrl)/functions/v1/save-groq-key") else {
+            AuthLogger.log("saveCloudGroqKey skipped: missing token or URL")
             return
         }
         var request = URLRequest(url: url)
@@ -708,11 +723,33 @@ class SwiftAuthManager: ObservableObject {
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["api_key": trimmed])
         request.timeoutInterval = 15
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await URLSession.shared.data(for: request)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            AuthLogger.log("saveCloudGroqKey status=\(status)")
+            AuthLogger.log("saveCloudGroqKey status=\(status) bytes=\(data.count)")
         } catch {
             AuthLogger.log("saveCloudGroqKey failed: \(error.localizedDescription)")
+        }
+    }
+
+    func deleteCloudHistory(timestamp: String) async {
+        guard let token = currentAccessToken(),
+              var components = URLComponents(string: "\(supabaseUrl)/rest/v1/riff_history") else {
+            return
+        }
+        components.queryItems = [URLQueryItem(name: "timestamp", value: "eq.\(timestamp)")]
+        guard let url = components.url else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("return=minimal", forHTTPHeaderField: "Prefer")
+        request.timeoutInterval = 15
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            AuthLogger.log("deleteCloudHistory status=\(status)")
+        } catch {
+            AuthLogger.log("deleteCloudHistory failed: \(error.localizedDescription)")
         }
     }
 
@@ -882,7 +919,11 @@ class SwiftAuthManager: ObservableObject {
         do {
             let data = try Data(contentsOf: authStatePath)
             let state = try JSONDecoder().decode(AuthState.self, from: data)
-
+            let fingerprint = "\(state.authenticated)|\(state.email)|\(state.userId)|\(state.timestamp)"
+            if quietIfMissing && fingerprint == lastAuthFingerprint {
+                return
+            }
+            lastAuthFingerprint = fingerprint
             AuthLogger.log("Cached auth state: authenticated=\(state.authenticated), email=\(state.email), timestamp=\(state.timestamp)")
 
             DispatchQueue.main.async {
@@ -1102,7 +1143,7 @@ enum AuthError: LocalizedError {
 }
 
 // MARK: - Auth Debug Logger
-/// Centralized logger for auth operations — writes to Application Support (not Documents).
+/// Writes to Application Support/Riff/logs. Keys and JWTs are redacted.
 struct AuthLogger {
     static let logDir: URL = {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -1113,25 +1154,53 @@ struct AuthLogger {
         return logDir.appendingPathComponent("debug_auth.log")
     }()
 
+    static let sessionFile: URL = {
+        return logDir.appendingPathComponent("riff.log")
+    }()
+
+    private static let writeQueue = DispatchQueue(label: "riff.authlogger")
+    private static let maxLogBytes: UInt64 = 8 * 1024 * 1024
+
+    static func redact(_ message: String) -> String {
+        var s = message
+        s = s.replacingOccurrences(of: #"gsk_[A-Za-z0-9]+"#, with: "gsk_REDACTED", options: .regularExpression)
+        s = s.replacingOccurrences(of: #"Bearer [A-Za-z0-9\-._]+"#, with: "Bearer REDACTED", options: .regularExpression)
+        s = s.replacingOccurrences(of: #"eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+"#, with: "JWT_REDACTED", options: .regularExpression)
+        return s
+    }
+
     static func log(_ message: String) {
         let timestamp = ISO8601DateFormatter().string(from: Date())
-        let line = "[\(timestamp)] [Auth] \(message)"
+        let line = "[\(timestamp)] [Auth] \(redact(message))"
         print(line)
 
-        // Also append to file for persistent debugging
-        DispatchQueue.global(qos: .utility).async {
+        writeQueue.async {
             try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
-            if let data = (line + "\n").data(using: .utf8) {
-                if FileManager.default.fileExists(atPath: logFile.path) {
-                    if let handle = try? FileHandle(forWritingTo: logFile) {
-                        handle.seekToEndOfFile()
-                        handle.write(data)
-                        handle.closeFile()
-                    }
-                } else {
-                    try? data.write(to: logFile)
-                }
+            rotateIfNeeded(logFile)
+            append(line, to: logFile)
+            append(line, to: sessionFile)
+        }
+    }
+
+    private static func rotateIfNeeded(_ url: URL) {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attrs[.size] as? UInt64,
+              size > maxLogBytes else { return }
+        let bak = url.appendingPathExtension("old")
+        try? FileManager.default.removeItem(at: bak)
+        try? FileManager.default.moveItem(at: url, to: bak)
+    }
+
+    private static func append(_ line: String, to url: URL) {
+        guard let data = (line + "\n").data(using: .utf8) else { return }
+        if FileManager.default.fileExists(atPath: url.path) {
+            if let handle = try? FileHandle(forWritingTo: url) {
+                handle.seekToEndOfFile()
+                handle.write(data)
+                handle.closeFile()
             }
+        } else {
+            try? data.write(to: url)
         }
     }
 }

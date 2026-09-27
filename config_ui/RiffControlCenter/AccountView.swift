@@ -1,146 +1,144 @@
-//
-//  AccountView.swift
-//  RiffControlCenter
-//
-//  Account management view with subscription status and billing
-//
-
 import SwiftUI
 
 struct AccountView: View {
     @EnvironmentObject var authManager: SwiftAuthManager
     @EnvironmentObject var settings: SettingsManager
-    @State private var keySaveTask: Task<Void, Never>?
+    @State private var keyDraft = ""
+    @FocusState private var keyFocused: Bool
 
     var body: some View {
         Group {
             if authManager.isAuthenticated {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 30) {
-                        userInfoSection
-                        Divider()
-                        apiKeySection
-                        Divider()
-                        signOutButton
-                        Spacer()
+                    VStack(alignment: .leading, spacing: 24) {
+                        identityCard
+                        themeCard
+                        keyCard
+                        RiffButton(
+                            title: "Sign Out",
+                            icon: "rectangle.portrait.and.arrow.right",
+                            kind: .danger,
+                            action: {
+                                authManager.signOut()
+                                settings.loadConfig()
+                            }
+                        )
                     }
-                    .padding(30)
+                    .padding(RiffTheme.space6)
                 }
             } else {
                 LoginView(compact: true)
             }
         }
+        .background(RiffTheme.surface000)
     }
 
-    @ViewBuilder
-    private var userInfoSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Account")
-                .font(.title2)
-                .bold()
-
-            HStack(spacing: 16) {
-                Circle()
-                    .fill(Color.blue)
-                    .frame(width: 60, height: 60)
-                    .overlay(
-                        Text(String(authManager.userEmail.prefix(1)).uppercased())
-                            .font(.title)
-                            .fontWeight(.bold)
-                            .foregroundStyle(.white)
-                    )
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(authManager.userEmail)
-                        .font(.body)
-                        .fontWeight(.medium)
-
-                    Text("Member since \(authManager.memberSince.isEmpty ? memberSinceDate() : authManager.memberSince)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
+    private var identityCard: some View {
+        HStack(spacing: 16) {
+            Text(String(authManager.userEmail.prefix(1)).uppercased())
+                .font(RiffType.mono(18))
+                .foregroundColor(RiffTheme.amberInk)
+                .frame(width: 40, height: 40)
+                .background(RiffTheme.amberWash)
+                .cornerRadius(RiffTheme.radiusXS)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(authManager.userEmail)
+                    .font(RiffType.h2)
+                    .foregroundColor(RiffTheme.ink)
+                Text("Member since \(authManager.memberSince.isEmpty ? memberSinceDate() : authManager.memberSince)")
+                    .font(RiffType.caption)
+                    .foregroundColor(RiffTheme.inkFaint)
             }
-            .padding(20)
-            .background(Color.gray.opacity(0.08))
-            .cornerRadius(12)
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(Color.gray.opacity(0.15), lineWidth: 1)
+            Spacer()
+        }
+        .padding(16)
+        .background(RiffTheme.surface100)
+        .overlay(RoundedRectangle(cornerRadius: RiffTheme.radiusSM).stroke(RiffTheme.line, lineWidth: 1))
+        .cornerRadius(RiffTheme.radiusSM)
+    }
+
+    private var themeCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Appearance")
+                .font(RiffType.h2)
+                .foregroundColor(RiffTheme.ink)
+            Text("Paper is the light theme. Terminal is dark. System follows macOS.")
+                .font(RiffType.bodySM)
+                .foregroundColor(RiffTheme.inkMuted)
+            RiffSegmentedControl(
+                options: [
+                    ("system", "System"),
+                    ("terminal", "Terminal"),
+                    ("paper", "Paper")
+                ],
+                selection: Binding(
+                    get: { settings.config.ui?.theme ?? "system" },
+                    set: { value in
+                        if settings.config.ui == nil {
+                            settings.config.ui = UIConfig(theme: value, show_notifications: settings.config.ui?.show_notifications)
+                        } else {
+                            settings.config.ui?.theme = value
+                        }
+                        settings.saveConfig()
+                        RiffTheme.applyAppearance(value)
+                    }
+                )
             )
         }
+        .padding(16)
+        .background(RiffTheme.surface100)
+        .overlay(RoundedRectangle(cornerRadius: RiffTheme.radiusSM).stroke(RiffTheme.line, lineWidth: 1))
+        .cornerRadius(RiffTheme.radiusSM)
     }
 
-    @ViewBuilder
-    private var apiKeySection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("API Key")
-                .font(.title2)
-                .bold()
-
-            Text("Paste once. Encrypted on your account so Mac, Android, and reinstalls restore it after login. Sign out clears it from this Mac.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            SecureField("gsk_...", text: Binding(
-                get: { settings.config.api.api_key },
-                set: { newValue in
-                    settings.config.api.api_key = newValue
-                    settings.saveConfig()
-                    scheduleCloudSave(newValue)
-                }
-            ))
+    private var keyCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Your Groq key")
+                .font(RiffType.h2)
+                .foregroundColor(RiffTheme.ink)
+            Text("Stored on your account so a new Mac or Android can restore it. Sign out clears it from this Mac.")
+                .font(RiffType.bodySM)
+                .foregroundColor(RiffTheme.inkMuted)
+            SecureField("gsk_...", text: $keyDraft)
             .textFieldStyle(.plain)
-            .font(.system(.body, design: .monospaced))
-            .padding(12)
-            .background(Color.gray.opacity(0.08))
-            .cornerRadius(8)
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color.gray.opacity(0.15), lineWidth: 1)
-            )
-
-            Link("Get your free API key from Groq →", destination: URL(string: "https://console.groq.com")!)
-                .font(.caption)
-                .foregroundStyle(.blue)
-        }
-    }
-
-    private var signOutButton: some View {
-        Button(action: {
-            authManager.signOut()
-            settings.loadConfig()
-        }) {
-            HStack {
-                Image(systemName: "rectangle.portrait.and.arrow.right")
-                Text("Sign Out")
+            .font(RiffType.mono(13))
+            .foregroundColor(RiffTheme.ink)
+            .padding(10)
+            .frame(height: 40)
+            .background(RiffTheme.surface200)
+            .overlay(RoundedRectangle(cornerRadius: RiffTheme.radiusXS).stroke(RiffTheme.lineStrong, lineWidth: 1))
+            .cornerRadius(RiffTheme.radiusXS)
+            .focused($keyFocused)
+            .onSubmit { commitKey() }
+            .onChange(of: keyFocused) { focused in
+                if !focused { commitKey() }
             }
-            .foregroundStyle(.red)
+            .onAppear { keyDraft = settings.config.api.api_key }
+            Button("Get a free key at console.groq.com/keys") {
+                if let url = URL(string: "https://console.groq.com/keys") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            .buttonStyle(.plain)
+            .font(RiffType.bodySM)
+            .foregroundColor(RiffTheme.link)
         }
-        .buttonStyle(.plain)
+        .padding(16)
+        .background(RiffTheme.surface100)
+        .overlay(RoundedRectangle(cornerRadius: RiffTheme.radiusSM).stroke(RiffTheme.line, lineWidth: 1))
+        .cornerRadius(RiffTheme.radiusSM)
     }
 
-    private func scheduleCloudSave(_ key: String) {
-        keySaveTask?.cancel()
-        keySaveTask = Task {
-            try? await Task.sleep(nanoseconds: 800_000_000)
-            guard !Task.isCancelled else { return }
-            await authManager.saveCloudGroqKey(key)
-        }
+    private func commitKey() {
+        let trimmed = keyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed != settings.config.api.api_key else { return }
+        settings.config.api.api_key = trimmed
+        settings.saveConfig()
+        guard trimmed.hasPrefix("gsk_"), trimmed.count >= 40 else { return }
+        Task { await authManager.saveCloudGroqKey(trimmed) }
     }
 
     private func memberSinceDate() -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        return formatter.string(from: Date())
-    }
-}
-
-struct AccountView_Previews: PreviewProvider {
-    static var previews: some View {
-        AccountView()
-            .environmentObject(SwiftAuthManager())
-            .environmentObject(SettingsManager())
+        "—"
     }
 }

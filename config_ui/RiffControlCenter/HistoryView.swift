@@ -1,124 +1,235 @@
 import SwiftUI
+import AppKit
 
 struct HistoryView: View {
     @EnvironmentObject var settings: SettingsManager
-    
+    @EnvironmentObject var authManager: SwiftAuthManager
+    @State private var query = ""
+    @State private var expandedID: String?
+    @State private var filter = "all"
+
+    private var flaggedCount: Int {
+        settings.history.filter { $0.likely_noise == true }.count
+    }
+
+    private var filtered: [HistoryEntry] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return settings.history.filter { entry in
+            if filter == "flagged" && entry.likely_noise != true { return false }
+            if q.isEmpty { return true }
+            return entry.refined.lowercased().contains(q)
+                || entry.original.lowercased().contains(q)
+                || entry.style.lowercased().contains(q)
+        }
+    }
+
     var body: some View {
-        VStack(alignment: .leading) {
-            Text("History")
-                .font(.title2)
-                .bold()
-                .padding(.horizontal, 30)
-                .padding(.top, 30)
-                
-            List {
-                if settings.history.isEmpty {
-                    Text("No riffs yet. Go make some noise!")
-                        .foregroundStyle(.secondary)
-                        .padding()
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("History")
+                    .font(RiffType.h1)
+                    .foregroundColor(RiffTheme.ink)
+                Spacer()
+            }
+            .padding(.horizontal, RiffTheme.space6)
+            .padding(.top, RiffTheme.space5)
+
+            if let metrics = settings.config.metrics, metrics.total_riffs > 0 {
+                RiffStatStrip(metrics: metrics)
+                    .padding(.horizontal, RiffTheme.space6)
+            }
+
+            if settings.history.isEmpty {
+                RiffEmptyState(
+                    icon: "clock.arrow.circlepath",
+                    title: "No riffs yet.",
+                    detail: "Hold",
+                    keycap: RiffHotkey.keycap(settings.config.hotkey.combination)
+                )
+                .padding(.horizontal, RiffTheme.space6)
+                Spacer()
+            } else {
+                HStack(spacing: 12) {
+                    HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(RiffTheme.inkFaint)
+                    TextField("Search riffs", text: $query)
+                        .textFieldStyle(.plain)
+                        .font(RiffType.body)
+                        .foregroundColor(RiffTheme.ink)
+                    }
+                    RiffSegmentedControl(
+                        options: [
+                            ("all", "All"),
+                            ("flagged", flaggedCount > 0 ? "Flagged \(flaggedCount)" : "Flagged")
+                        ],
+                        selection: $filter
+                    )
+                    .frame(width: 220)
+                }
+                .padding(.horizontal, 12)
+                .frame(height: 32)
+                .background(RiffTheme.surface200)
+                .overlay(RoundedRectangle(cornerRadius: RiffTheme.radiusXS).stroke(RiffTheme.lineStrong, lineWidth: 1))
+                .cornerRadius(RiffTheme.radiusXS)
+                .padding(.horizontal, RiffTheme.space6)
+
+                if filtered.isEmpty {
+                    RiffEmptyState(
+                        icon: "magnifyingglass",
+                        title: "No matches.",
+                        detail: "Try another word."
+                    )
+                    .padding(.horizontal, RiffTheme.space6)
+                    Spacer()
                 } else {
-                    ForEach(settings.history) { entry in
-                        HistoryRow(entry: entry)
-                            .padding(.vertical, 4)
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            ForEach(filtered) { entry in
+                                HistoryRow(
+                                    entry: entry,
+                                    compact: false,
+                                    expanded: expandedID == entry.id,
+                                    onToggle: {
+                                        expandedID = expandedID == entry.id ? nil : entry.id
+                                    },
+                                    onDelete: {
+                                        settings.deleteHistory(timestamp: entry.timestamp)
+                                        if expandedID == entry.id { expandedID = nil }
+                                        Task { await authManager.deleteCloudHistory(timestamp: entry.timestamp) }
+                                    }
+                                )
+                            }
+                        }
+                        .background(RiffTheme.surface100)
+                        .overlay(RoundedRectangle(cornerRadius: RiffTheme.radiusSM).stroke(RiffTheme.line, lineWidth: 1))
+                        .cornerRadius(RiffTheme.radiusSM)
+                        .padding(.horizontal, RiffTheme.space6)
+                        .padding(.bottom, RiffTheme.space6)
                     }
                 }
             }
-            .listStyle(.inset)
         }
+        .background(RiffTheme.surface000)
     }
 }
 
 struct HistoryRow: View {
     let entry: HistoryEntry
-    @State private var hover = false
-    
+    var compact: Bool = false
+    var expanded: Bool = false
+    var onToggle: (() -> Void)? = nil
+    var onDelete: (() -> Void)? = nil
+    @State private var confirmDelete = false
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(entry.style.uppercased())
-                    .font(.caption2)
-                    .fontWeight(.bold)
-                    .foregroundStyle(.secondary)
-                    .padding(4)
-                    .background(Color.gray.opacity(0.1))
-                    .cornerRadius(4)
-                
-                Spacer()
-                
-                Text(formatDate(entry.timestamp))
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                
-                Button(action: {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(entry.refined, forType: .string)
-                }) {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                RiffTag(text: entry.style, kind: .neutral)
+                    .frame(width: 76, alignment: .leading)
+                Text(entry.refined)
+                    .font(RiffType.body)
+                    .foregroundColor(RiffTheme.ink)
+                    .lineLimit(expanded ? nil : (compact ? 2 : 3))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        if let onToggle {
+                            onToggle()
+                        } else {
+                            copyText()
+                        }
+                    }
+                if entry.likely_noise == true {
+                    RiffTag(text: "Likely noise", kind: .loss)
+                }
+                if let ms = entry.round_trip_ms, ms > 0 {
+                    Text(RiffFormat.seconds(ms))
+                        .font(RiffType.num)
+                        .foregroundColor(ms > 3000 ? RiffTheme.loss : RiffTheme.inkMuted)
+                }
+                if !compact {
+                    Text(RiffDate.history(entry.timestamp))
+                        .font(RiffType.mono(12))
+                        .foregroundColor(RiffTheme.inkFaint)
+                }
+                Button(action: copyText) {
                     Image(systemName: "doc.on.doc")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(RiffTheme.inkMuted)
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("Copy to clipboard")
+                .help("Copy text")
+                .accessibilityLabel("Copy riff")
+                if onDelete != nil {
+                    Button(action: { confirmDelete = true }) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(RiffTheme.loss)
+                            .frame(width: 32, height: 32)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Delete riff")
+                    .accessibilityLabel("Delete riff")
+                    .popover(isPresented: $confirmDelete, arrowEdge: .leading) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Delete this riff?")
+                                .font(RiffType.h2)
+                                .foregroundColor(RiffTheme.ink)
+                            Text("Removes it from History on this Mac.")
+                                .font(RiffType.bodySM)
+                                .foregroundColor(RiffTheme.inkMuted)
+                            HStack(spacing: 8) {
+                                Spacer()
+                                RiffButton(title: "Cancel", kind: .ghost, action: { confirmDelete = false })
+                                RiffButton(title: "Delete", kind: .danger, action: {
+                                    confirmDelete = false
+                                    onDelete?()
+                                })
+                            }
+                        }
+                        .padding(14)
+                        .frame(width: 260)
+                    }
+                }
             }
-            
-            Text(entry.refined)
-                .font(.body)
-                .lineLimit(3)
+            if expanded {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("RAW")
+                        .font(RiffType.label)
+                        .tracking(1.1)
+                        .foregroundColor(RiffTheme.inkFaint)
+                    Text(entry.original)
+                        .font(RiffType.bodySM)
+                        .foregroundColor(RiffTheme.inkMuted)
+                    Text("REWRITE")
+                        .font(RiffType.label)
+                        .tracking(1.1)
+                        .foregroundColor(RiffTheme.inkFaint)
+                    Text(entry.refined)
+                        .font(RiffType.bodySM)
+                        .foregroundColor(RiffTheme.ink)
+                    if let t = entry.transcribe_ms, let r = entry.rewrite_ms, let p = entry.type_ms {
+                        TimingBar(transcribe: t, rewrite: r, type: p)
+                    }
+                }
+                .padding(12)
+                .background(RiffTheme.surface200)
+                .cornerRadius(RiffTheme.radiusSM)
+            }
         }
-        .padding(10)
-        .background(Color.gray.opacity(0.08))
-        .cornerRadius(8)
-        .onTapGesture {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(entry.refined, forType: .string)
+        .padding(12)
+        .background(Color.clear)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(RiffTheme.line).frame(height: 1)
         }
     }
-    
-    func formatDate(_ iso: String) -> String {
-        // "Wall Clock" Strategy:
-        // The backend saves Local Time (e.g. 20:48). We want to see 20:48.
-        // We force both Parser and Display to use GMT. This treats the numbers as literals
-        // and prevents any system timezone offsets from shifting the time.
-        
-        // 1. Parser (Treat input string as GMT)
-        let parser = DateFormatter()
-        parser.calendar = Calendar(identifier: .iso8601)
-        parser.locale = Locale(identifier: "en_US_POSIX")
-        parser.timeZone = TimeZone(secondsFromGMT: 0) // GMT
-        
-        var date: Date?
-        
-        // Attempt 1: Full precision
-        parser.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSS"
-        date = parser.date(from: iso)
-        
-        // Attempt 2: No fractional seconds
-        if date == nil {
-            parser.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
-            date = parser.date(from: iso)
-        }
-        
-        // Attempt 3: ISO Standard parser (fallback)
-        if date == nil {
-            let isoFormatter = ISO8601DateFormatter()
-            isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            isoFormatter.timeZone = TimeZone(secondsFromGMT: 0) // GMT
-            date = isoFormatter.date(from: iso)
-        }
 
-        if let validDate = date {
-            return formatDisplayDate(validDate)
-        }
-
-        // Fallback: Just show raw string if parsing fails
-        return iso.components(separatedBy: "T").last?.components(separatedBy: ".").first ?? iso
-    }
-    
-    func formatDisplayDate(_ date: Date) -> String {
-        let displayFormatter = DateFormatter()
-        displayFormatter.dateStyle = .medium // e.g. Jan 28, 2026
-        displayFormatter.timeStyle = .short  // e.g. 8:48 PM
-        displayFormatter.timeZone = TimeZone(secondsFromGMT: 0) // GMT (Crucial: Don't shift back to local)
-        return displayFormatter.string(from: date)
+    private func copyText() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(entry.refined, forType: .string)
     }
 }

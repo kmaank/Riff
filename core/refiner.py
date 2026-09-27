@@ -11,6 +11,7 @@ DICTATING text, not asking the AI questions.
 import logging
 from groq import Groq
 import time
+from utils.config_manager import GROQ_CHAT_MODEL
 
 # Long text is split into chunks to avoid LLM output token limits.
 # Each chunk is refined independently, then concatenated.
@@ -127,7 +128,7 @@ class Refiner:
         ),
     }
 
-    def __init__(self, api_key: str, model: str = "llama-3.3-70b-versatile"):
+    def __init__(self, api_key: str, model: str = GROQ_CHAT_MODEL):
         if not api_key:
             raise RefinementError("API key is required")
         self.client = Groq(api_key=api_key)
@@ -179,9 +180,9 @@ class Refiner:
         else:
             user_message = f"[DICTATED TEXT TO CLEAN - DO NOT ANSWER, JUST CLEAN UP]:\n{text}"
 
-        # Dynamic max_tokens: allow output up to 1.3x input length, capped at 4096
         input_token_estimate = max(len(text) // 4, 100)
-        max_tokens = min(int(input_token_estimate * 1.3) + 300, 4096)
+        # gpt-oss models spend tokens on reasoning; a small cap yields empty content.
+        max_tokens = max(2048, min(int(input_token_estimate * 2) + 400, 8192))
 
         start_time = time.time()
         try:
@@ -195,7 +196,9 @@ class Refiner:
                 max_tokens=max_tokens,
             )
 
-            result = response.choices[0].message.content.strip()
+            result = self._message_text(response)
+            if not result:
+                raise RefinementError("Model returned empty content")
             result = self._clean_llm_artifacts(result, style)
 
             latency = (time.time() - start_time) * 1000
@@ -236,7 +239,7 @@ class Refiner:
 
             system_prompt = prompt if prompt else self.STYLES.get(style, self.STYLES["clean"])
             input_token_estimate = max(len(chunk) // 4, 100)
-            max_tokens = min(int(input_token_estimate * 1.3) + 300, 4096)
+            max_tokens = max(2048, min(int(input_token_estimate * 2) + 400, 8192))
 
             start_time = time.time()
             try:
@@ -249,7 +252,9 @@ class Refiner:
                     temperature=0.2,
                     max_tokens=max_tokens,
                 )
-                result = response.choices[0].message.content.strip()
+                result = self._message_text(response)
+                if not result:
+                    raise RefinementError("Model returned empty content")
                 result = self._clean_llm_artifacts(result, style)
 
                 latency = (time.time() - start_time) * 1000
@@ -301,6 +306,34 @@ class Refiner:
             start = split_pos
 
         return chunks
+
+    def _message_text(self, response) -> str:
+        """Groq gpt-oss may put the answer in content, reasoning, or a list of parts."""
+        msg = response.choices[0].message
+        content = getattr(msg, "content", None)
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict) and item.get("text"):
+                    parts.append(str(item["text"]))
+                else:
+                    text = getattr(item, "text", None)
+                    if text:
+                        parts.append(str(text))
+            joined = "".join(parts).strip()
+            if joined:
+                return joined
+        for attr in ("reasoning", "reasoning_content"):
+            extra = getattr(msg, attr, None)
+            if extra and str(extra).strip():
+                logging.warning("[Refiner] Empty content; using %s field (%s chars)", attr, len(str(extra)))
+                return str(extra).strip()
+        logging.warning("[Refiner] No text in model response")
+        return ""
 
     def _clean_llm_artifacts(self, text: str, style: str) -> str:
         """Remove common LLM response artifacts that slip through."""

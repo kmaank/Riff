@@ -2,8 +2,7 @@ import SwiftUI
 
 struct KeysView: View {
     @EnvironmentObject var settings: SettingsManager
-    
-    // Common keys map to pynput names
+
     let availableKeys: [(String, String)] = [
         ("Left Control", "ctrl_l"),
         ("Right Control", "ctrl_r"),
@@ -15,107 +14,73 @@ struct KeysView: View {
         ("F5", "f5"), ("F6", "f6"), ("F7", "f7"), ("F8", "f8"),
         ("F9", "f9"), ("F10", "f10"), ("F11", "f11"), ("F12", "f12")
     ]
-    
+
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 30) {
-                Text("Keys & Permissions")
-                    .font(.title2)
-                    .bold()
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Shortcuts")
+                        .font(RiffType.h2)
+                        .foregroundColor(RiffTheme.ink)
+                    Text("Press and hold this key to speak. You can change it without restarting Riff.")
+                        .font(RiffType.bodySM)
+                        .foregroundColor(RiffTheme.inkMuted)
+                }
 
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Push-to-Talk Key")
-                        .font(.headline)
-                    Text("Press and hold this key to speak.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
+                    Text("PUSH-TO-TALK")
+                        .font(RiffType.label)
+                        .tracking(1.1)
+                        .foregroundColor(RiffTheme.inkFaint)
                     Picker("", selection: $settings.config.hotkey.combination) {
                         ForEach(availableKeys, id: \.1) { name, value in
                             Text(name).tag(value)
                         }
                     }
                     .labelsHidden()
-                    .frame(width: 200)
+                    .frame(width: 220)
                     .onChange(of: settings.config.hotkey.combination) { _ in
                         settings.saveConfig()
                     }
-                }
-                .padding()
-                .background(Color.gray.opacity(0.08))
-                .cornerRadius(10)
-
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Latch Mode")
-                        .font(.headline)
-
-                    HStack(spacing: 15) {
-                        Image(systemName: "lock.open.fill")
-                            .font(.title)
-                            .foregroundStyle(.orange)
-
-                        VStack(alignment: .leading) {
-                            Text("Shift + Trigger Key")
-                                .bold()
-                            Text("Hold Shift while pressing your trigger key to lock recording ON. Press trigger again to stop.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                    HStack(spacing: 8) {
+                        Text("Hold")
+                            .font(RiffType.bodySM)
+                            .foregroundColor(RiffTheme.inkMuted)
+                        RiffKeyCap(text: RiffHotkey.keycap(settings.config.hotkey.combination))
+                        Text("and speak.")
+                            .font(RiffType.bodySM)
+                            .foregroundColor(RiffTheme.inkMuted)
                     }
                 }
-                .padding()
-                .background(Color.gray.opacity(0.08))
-                .cornerRadius(10)
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RiffTheme.surface100)
+                .overlay(RoundedRectangle(cornerRadius: RiffTheme.radiusSM).stroke(RiffTheme.line, lineWidth: 1))
+                .cornerRadius(RiffTheme.radiusSM)
 
-                // Permissions Section
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Permissions")
-                        .font(.headline)
-
-                    Text("Riff requires Microphone, Accessibility, and Input Monitoring permissions.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    VStack(spacing: 8) {
-                        Button("Open Microphone Settings") {
-                            openMicrophoneSettings()
-                        }
-                        .buttonStyle(.bordered)
-
-                        Button("Open Accessibility Settings") {
-                            openAccessibilitySettings()
-                        }
-                        .buttonStyle(.bordered)
-
-                        Button("Open Input Monitoring Settings") {
-                            openInputSettings()
-                        }
-                        .buttonStyle(.bordered)
+                    Text("LATCH")
+                        .font(RiffType.label)
+                        .tracking(1.1)
+                        .foregroundColor(RiffTheme.inkFaint)
+                    HStack(spacing: 8) {
+                        RiffKeyCap(text: "SHIFT")
+                        Text("+")
+                            .foregroundColor(RiffTheme.inkMuted)
+                        RiffKeyCap(text: RiffHotkey.keycap(settings.config.hotkey.combination))
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Text("Hold Shift with your key to lock recording on. Press \(RiffHotkey.keycap(settings.config.hotkey.combination)) again to stop.")
+                        .font(RiffType.bodySM)
+                        .foregroundColor(RiffTheme.inkMuted)
                 }
-                .padding()
-                .background(Color.gray.opacity(0.08))
-                .cornerRadius(10)
-
-                Spacer()
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RiffTheme.surface100)
+                .overlay(RoundedRectangle(cornerRadius: RiffTheme.radiusSM).stroke(RiffTheme.line, lineWidth: 1))
+                .cornerRadius(RiffTheme.radiusSM)
             }
-            .padding(30)
+            .padding(RiffTheme.space6)
         }
-    }
-
-    func openMicrophoneSettings() {
-        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!
-        NSWorkspace.shared.open(url)
-    }
-
-    func openAccessibilitySettings() {
-        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
-        NSWorkspace.shared.open(url)
-    }
-
-    func openInputSettings() {
-        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")!
-        NSWorkspace.shared.open(url)
+        .background(RiffTheme.surface000)
     }
 }
