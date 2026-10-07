@@ -21,7 +21,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-VERSION="${RIFF_PKG_VERSION:-1.2.8}"
+VERSION="${RIFF_PKG_VERSION:-1.2.9}"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 OUTPUT_DIR="$SCRIPT_DIR/build_output"
 ENTITLEMENTS="$SCRIPT_DIR/entitlements/Riff.entitlements"

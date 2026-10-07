@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 APP="dist/Riff.app"
 ENT="entitlements/Riff.entitlements"
 PROFILE="${RIFF_NOTARY_PROFILE:-riff-notary}"
-VERSION="${RIFF_PKG_VERSION:-1.2.8}"
+VERSION="${RIFF_PKG_VERSION:-1.2.9}"
 OUT="build_output"
 
 APP_ID="${RIFF_SIGN_IDENTITY:-}"

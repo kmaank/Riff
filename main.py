@@ -41,7 +41,15 @@ except ImportError:
     logging.warning("Auth modules not available - running without subscription management")
 
 # Setup Logging
-from utils.logger import setup_logging, log_crash, log_activity, open_logs_folder, write_diagnostics, SESSION_ID
+from utils.logger import (
+    setup_logging,
+    log_crash,
+    log_activity,
+    open_logs_folder,
+    write_diagnostics,
+    show_user_alert,
+    SESSION_ID,
+)
 
 # Initialize logging
 try:
@@ -1498,10 +1506,59 @@ class RiffApp:
                 except OSError as e:
                     logging.warning("[Settings] Could not chmod Control Center (continuing): %s", e)
 
-            subprocess.Popen(["open", app_path])
+            # Reuse an existing Home window when possible; -n only if none running.
+            open_cmd = ["open", "-a", app_path]
+            if not self._is_control_center_running():
+                open_cmd = ["open", "-n", "-a", app_path]
+            subprocess.Popen(open_cmd)
+            threading.Thread(
+                target=self._activate_control_center,
+                args=(app_path,),
+                daemon=True,
+                name="riff-activate-home",
+            ).start()
             logging.info("[Settings] Control Center launched via open")
         except Exception as e:
             logging.error(f"[Settings] Could not open settings: {e}", exc_info=True)
+            show_user_alert(
+                "Riff could not open Home",
+                "The settings window failed to open. Use menu bar → Open Home, "
+                "or Advanced → Reveal Logs.",
+            )
+
+    def _activate_control_center(self, app_path: str, attempts: int = 8):
+        """Bring Home to the front so first launch is never invisible."""
+        for i in range(attempts):
+            time.sleep(0.35 if i == 0 else 0.5)
+            if self._is_control_center_running():
+                try:
+                    subprocess.run(
+                        [
+                            "osascript",
+                            "-e",
+                            'tell application "System Events" to set frontmost of '
+                            'first process whose name is "RiffControlCenter" to true',
+                        ],
+                        capture_output=True,
+                        check=False,
+                    )
+                except OSError:
+                    pass
+                try:
+                    subprocess.run(
+                        ["open", "-a", app_path],
+                        capture_output=True,
+                        check=False,
+                    )
+                except OSError:
+                    pass
+                return
+        logging.error("[Settings] Control Center did not stay running after open")
+        show_user_alert(
+            "Riff Home did not open",
+            "Riff is running in the menu bar (top-right). Click the Riff icon → Open Home.\n\n"
+            "If you still see nothing, use Advanced → Reveal Logs and share riff.log.",
+        )
 
     def open_instructions(self):
         self.open_settings()
@@ -1633,29 +1690,174 @@ def launch_settings_app(config, app_instance=None):
         if os.path.exists(app_path):
             binary_path = os.path.join(app_path, "Contents", "MacOS", "RiffControlCenter")
             if os.path.exists(binary_path):
-                os.chmod(binary_path, os.stat(binary_path).st_mode | stat.S_IEXEC)
-            subprocess.call(["open", app_path])
+                try:
+                    os.chmod(binary_path, os.stat(binary_path).st_mode | stat.S_IEXEC)
+                except OSError as e:
+                    logging.warning("[Settings] chmod failed (continuing): %s", e)
+            subprocess.Popen(["open", "-n", "-a", app_path])
+            # Activate without a RiffApp instance yet.
+            def _activate():
+                for i in range(8):
+                    time.sleep(0.35 if i == 0 else 0.5)
+                    try:
+                        running = subprocess.run(
+                            ["pgrep", "-x", "RiffControlCenter"],
+                            capture_output=True,
+                            text=True,
+                        )
+                        if running.returncode == 0:
+                            subprocess.run(
+                                [
+                                    "osascript",
+                                    "-e",
+                                    'tell application "System Events" to set frontmost of '
+                                    'first process whose name is "RiffControlCenter" to true',
+                                ],
+                                capture_output=True,
+                                check=False,
+                            )
+                            return
+                    except OSError:
+                        pass
+                show_user_alert(
+                    "Riff Home did not open",
+                    "Look for the Riff icon in the menu bar (top-right of the screen). "
+                    "Click it → Open Home.\n\n"
+                    "Riff needs an Apple Silicon Mac (M1 or newer). Intel Macs are not supported yet.",
+                )
+            threading.Thread(target=_activate, daemon=True, name="riff-activate-home").start()
         else:
             logging.error(f"Settings app not found at {app_path}")
+            show_user_alert(
+                "Riff install is incomplete",
+                "Home (RiffControlCenter) is missing from the app bundle. "
+                "Re-download Riff-1.2.9.dmg from GitHub Releases and drag Riff into Applications again.",
+            )
             subprocess.call(["open", config.config_path])
     except Exception as e:
-        logging.error(f"Could not open settings: {e}")
+        logging.error(f"Could not open settings: {e}", exc_info=True)
+        show_user_alert("Riff could not open Home", str(e))
+
+
+def _other_riff_running() -> bool:
+    """True if another Riff tray process is already alive (not this PID)."""
+    try:
+        out = subprocess.run(
+            ["pgrep", "-x", "Riff"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if out.returncode != 0:
+            return False
+        my_pid = os.getpid()
+        for line in out.stdout.split():
+            try:
+                if int(line) != my_pid:
+                    return True
+            except ValueError:
+                continue
+    except OSError:
+        pass
+    return False
+
+
+def _wake_existing_riff() -> None:
+    """Second double-click: open Home instead of looking like a no-op."""
+    try:
+        subprocess.run(
+            ["osascript", "-e",
+             'tell application "System Events" to tell process "Riff" to click menu bar item 1 of menu bar 2'],
+            capture_output=True,
+            check=False,
+            timeout=3,
+        )
+    except Exception:
+        pass
+    # Prefer launching Home from the installed bundle next to this executable.
+    try:
+        if getattr(sys, "frozen", False):
+            exe_dir = os.path.dirname(sys.executable)
+            cc = os.path.abspath(os.path.join(exe_dir, "..", "Resources", "RiffControlCenter.app"))
+            if os.path.exists(cc):
+                subprocess.Popen(["open", "-a", cc])
+                return
+    except OSError:
+        pass
+    show_user_alert(
+        "Riff is already running",
+        "Look in the menu bar (top-right) for the Riff icon. Click it → Open Home.",
+    )
 
 
 def main():
+    import platform as _platform
+
+    machine = _platform.machine().lower()
+    logging.info("Machine arch=%s frozen=%s", machine, getattr(sys, "frozen", False))
+    if machine in ("x86_64", "i386"):
+        show_user_alert(
+            "Riff needs Apple Silicon",
+            "This build only runs on Apple Silicon Macs (M1, M2, M3, M4).\n\n"
+            "Intel Macs are not supported yet. Please try on an M-series Mac.",
+        )
+        return
+
+    if _other_riff_running():
+        logging.info("Another Riff instance is running — waking Home instead of starting twice")
+        _wake_existing_riff()
+        return
+
     config = ConfigManager()
     api_key = config.get("api.api_key")
     onboarded = config.get("onboarding_completed")
-    if not onboarded or not api_key:
-        print("Setup required. Launching Riff Control Center...")
+    first_run = not onboarded or not api_key
+    if first_run:
+        print("Setup required. Launching Riff Home...")
         launch_settings_app(config)
 
     app = RiffApp()
     for arg in sys.argv[1:]:
         if isinstance(arg, str) and arg.startswith("riff://"):
             app.handle_auth_url(arg)
-    app.start()
+
+    if first_run:
+        def _menu_bar_nudge():
+            time.sleep(2.5)
+            try:
+                app.tray.show_notification(
+                    "Riff is in the menu bar",
+                    "Click the Riff icon (top-right) anytime to open Home.",
+                )
+            except Exception:
+                pass
+        threading.Thread(target=_menu_bar_nudge, daemon=True).start()
+
+    try:
+        app.start()
+    except Exception as e:
+        logging.critical("Tray/main loop failed: %s", e, exc_info=True)
+        show_user_alert(
+            "Riff failed to start",
+            "The menu bar icon could not start. Click OK to open logs.\n\n"
+            f"{type(e).__name__}: {e}",
+        )
+        open_logs_folder()
+        raise
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        logging.critical("Fatal launch error: %s", e, exc_info=True)
+        try:
+            show_user_alert(
+                "Riff failed to open",
+                "Click OK to open the logs folder and share riff.log.\n\n"
+                f"{type(e).__name__}: {e}",
+            )
+            open_logs_folder()
+        except Exception:
+            pass
+        sys.exit(1)

@@ -189,6 +189,20 @@ def log_activity(message: str):
         pass
 
 
+def show_user_alert(title: str, message: str, buttons: str = "OK") -> None:
+    """Show a blocking macOS dialog even when the tray has no Dock icon."""
+    if sys.platform != "darwin":
+        print(f"{title}: {message}")
+        return
+    safe_title = title.replace("\\", "\\\\").replace('"', '\\"')
+    safe_msg = message.replace("\\", "\\\\").replace('"', '\\"')
+    script = f'display dialog "{safe_msg}" with title "{safe_title}" buttons {{"{buttons}"}} default button 1'
+    try:
+        subprocess.run(["osascript", "-e", script], check=False, capture_output=True)
+    except OSError:
+        pass
+
+
 def log_crash(exc_type, exc_value, exc_traceback):
     """Global crash handler to log unhandled exceptions."""
     if issubclass(exc_type, KeyboardInterrupt):
@@ -196,3 +210,13 @@ def log_crash(exc_type, exc_value, exc_traceback):
         return
 
     logging.critical("Uncaught Exception", exc_info=(exc_type, exc_value, exc_traceback))
+    try:
+        show_user_alert(
+            "Riff quit unexpectedly",
+            "Something went wrong on launch. Click OK to open the logs folder, "
+            "then share riff.log with support.\n\n"
+            f"{exc_type.__name__}: {exc_value}",
+        )
+        open_logs_folder()
+    except Exception:
+        pass

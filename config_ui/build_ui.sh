@@ -37,17 +37,18 @@ cat > "$OUTPUT_APP/Contents/Info.plist" <<EOF
     <key>CFBundleIdentifier</key>
     <string>com.riff.controlcenter</string>
     <key>CFBundleName</key>
-    <string>Riff Settings</string>
+    <string>Riff</string>
     <key>CFBundleDisplayName</key>
-    <string>Riff Settings</string>
+    <string>Riff</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
     <string>1.0</string>
     <key>LSMinimumSystemVersion</key>
     <string>12.0</string>
+    <!-- Home must appear in the Dock while open. Tray stays agent-only. -->
     <key>LSUIElement</key>
-    <true/>
+    <false/>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>NSHighResolutionCapable</key>

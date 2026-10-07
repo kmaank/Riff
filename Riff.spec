@@ -82,10 +82,11 @@ app = BUNDLE(
         'NSInputMonitoringUsageDescription': 'Riff needs Input Monitoring so it can notice when you hold the hotkey.',
         'NSInputMonitoringUsageDescription': 'Riff needs Input Monitoring so it can notice when you hold the dictation key.',
         'LSUIElement': True,
+        'LSMinimumSystemVersion': '12.0',
         'CFBundleName': 'Riff',
         'CFBundleDisplayName': 'Riff',
-        'CFBundleShortVersionString': '1.2.8',
-        'CFBundleVersion': '1.2.8',
+        'CFBundleShortVersionString': '1.2.9',
+        'CFBundleVersion': '1.2.9',
         'CFBundleURLTypes': [{
             'CFBundleURLName': 'com.riff.app.auth',
             'CFBundleURLSchemes': ['riff'],

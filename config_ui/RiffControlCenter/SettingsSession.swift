@@ -198,6 +198,21 @@ enum SettingsSession {
 
 final class RiffAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Always take focus so first launch is never an invisible background window.
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        DispatchQueue.main.async {
+            for window in NSApp.windows {
+                window.makeKeyAndOrderFront(nil)
+            }
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            for window in NSApp.windows {
+                window.makeKeyAndOrderFront(nil)
+            }
+            NSApp.activate(ignoringOtherApps: true)
+        }
         let saved = SettingsSession.load()
         SettingsSession.update(resume: saved?.resume ?? false)
     }
