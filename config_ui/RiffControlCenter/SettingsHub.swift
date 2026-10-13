@@ -65,11 +65,11 @@ struct DictionaryPlaceholderView: View {
 struct PermissionsSettingsView: View {
     @EnvironmentObject var runtime: RiffRuntimeStatus
 
-    private var rows: [(id: String, title: String, why: String, granted: Bool)] {
+    private var rows: [(id: String, title: String, why: String, granted: Bool?)] {
         [
-            ("microphone", "Microphone", "So Riff can hear you. Turn on the row named Riff.", runtime.microphoneGranted),
-            ("accessibility", "Accessibility", "So Riff can paste into the focused field. Turn on the row named Riff.", runtime.permissions.accessibility),
-            ("input_monitoring", "Input Monitoring", "So Riff notices when you hold the key. Turn on the row named Riff.", runtime.permissions.input_monitoring)
+            ("microphone", "Microphone", "So Riff can hear you. Turn on the row named Riff.", runtime.reporterStale ? nil : runtime.microphoneGranted),
+            ("accessibility", "Accessibility", "So Riff can paste into the focused field. Turn on the row named Riff.", runtime.reporterStale ? nil : runtime.permissions.accessibility),
+            ("input_monitoring", "Input Monitoring", "So Riff notices when you hold the key. Turn on the row named Riff.", runtime.reporterStale ? nil : runtime.permissions.input_monitoring)
         ]
     }
 
@@ -85,10 +85,10 @@ struct PermissionsSettingsView: View {
                     )
                 } else if runtime.reporterStale {
                     RiffBanner(
-                        title: "Riff is not reporting permissions",
-                        detail: "Open the menu-bar Riff app. This window cannot see Microphone until that process is running.",
-                        actionTitle: "Recheck",
-                        action: { runtime.refresh() }
+                        title: runtime.startingMenuBar ? "Starting Riff" : "Riff is not reporting permissions",
+                        detail: "The menu-bar app is not running, so this window cannot see a live Microphone status. Riff is starting it.",
+                        actionTitle: "Start Riff",
+                        action: { runtime.ensureMenuBarApp() }
                     )
                 } else if runtime.missingPermissionCount > 0 {
                     RiffBanner(
@@ -150,7 +150,7 @@ struct PermissionsSettingsView: View {
 struct PermissionRowView: View {
     let title: String
     let why: String
-    let granted: Bool
+    let granted: Bool?
     let action: () -> Void
 
     var body: some View {
@@ -168,10 +168,14 @@ struct PermissionRowView: View {
                     .foregroundColor(RiffTheme.inkMuted)
             }
             Spacer()
-            RiffTag(text: granted ? "Granted" : "Missing", kind: granted ? .gain : .loss, showArrow: true)
+            RiffTag(
+                text: granted == nil ? "Waiting" : (granted == true ? "Granted" : "Missing"),
+                kind: granted == nil ? .neutral : (granted == true ? .gain : .loss),
+                showArrow: granted != nil
+            )
             RiffButton(
-                title: granted ? "Manage" : "Open settings",
-                kind: granted ? .secondary : .primary,
+                title: granted == true ? "Manage" : "Open settings",
+                kind: granted == true ? .secondary : .primary,
                 action: action
             )
         }

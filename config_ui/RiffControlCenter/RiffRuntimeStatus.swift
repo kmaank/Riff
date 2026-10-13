@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Combine
 
 final class RiffRuntimeStatus: ObservableObject {
@@ -7,8 +8,14 @@ final class RiffRuntimeStatus: ObservableObject {
     @Published var provider = GroqProviderStatus(state: "unknown", label: "Unknown", waiting: 0, retry_after: nil)
     @Published var reporterStale = true
     @Published var applyingPermissions = false
+    @Published var startingMenuBar = false
+    @Published var updateAvailable = false
+    @Published var updateLatest = ""
+    @Published var updateState = "idle"
+    @Published var updateMessage = ""
 
     private var timer: Timer?
+    private var lastLaunchAttempt = Date.distantPast
 
     init() {
         refresh()
@@ -79,12 +86,33 @@ final class RiffRuntimeStatus: ObservableObject {
                 self.permissions = next
                 self.reporterStale = stale
                 self.applyingPermissions = relaunching
+                if !stale {
+                    self.startingMenuBar = false
+                }
             }
+        }
+        if stale && !relaunching {
+            ensureMenuBarApp()
         }
         if let data = try? Data(contentsOf: dir.appendingPathComponent("hud_status.json")),
            let decoded = try? JSONDecoder().decode(HudStatus.self, from: data),
            decoded.state != hud.state {
             DispatchQueue.main.async { self.hud = decoded }
+        }
+        if let data = try? Data(contentsOf: dir.appendingPathComponent("update_status.json")),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let available = (obj["available"] as? Bool) == true
+            let latest = obj["latest"] as? String ?? ""
+            let state = obj["state"] as? String ?? "idle"
+            let message = obj["message"] as? String ?? ""
+            if available != updateAvailable || latest != updateLatest || state != updateState || message != updateMessage {
+                DispatchQueue.main.async {
+                    self.updateAvailable = available
+                    self.updateLatest = latest
+                    self.updateState = state
+                    self.updateMessage = message
+                }
+            }
         }
         if let data = try? Data(contentsOf: dir.appendingPathComponent("provider_status.json")),
            let decoded = try? JSONDecoder().decode(GroqProviderStatus.self, from: data) {
@@ -92,6 +120,48 @@ final class RiffRuntimeStatus: ObservableObject {
                 DispatchQueue.main.async { self.provider = decoded }
             }
         }
+    }
+
+    func requestUpdate() {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("Riff")
+        let url = dir.appendingPathComponent("update_install.request")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? Data("1".utf8).write(to: url)
+        DispatchQueue.main.async {
+            self.updateState = "downloading"
+            self.updateMessage = "Downloading the latest Riff…"
+        }
+    }
+
+    /// Home cannot see the microphone or hotkey unless the menu-bar process is alive.
+    /// If its heartbeat is stale, start that process instead of leaving a dead banner.
+    func ensureMenuBarApp() {
+        let now = Date()
+        guard now.timeIntervalSince(lastLaunchAttempt) > 8 else { return }
+        lastLaunchAttempt = now
+        let url = Self.menuBarAppURL()
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        DispatchQueue.main.async { self.startingMenuBar = true }
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = false
+        NSWorkspace.shared.openApplication(at: url, configuration: config) { _, error in
+            if error != nil {
+                DispatchQueue.main.async { self.startingMenuBar = false }
+            }
+        }
+    }
+
+    private static func menuBarAppURL() -> URL {
+        let bundle = Bundle.main.bundleURL
+        let parent = bundle
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        if parent.lastPathComponent == "Riff.app" {
+            return parent
+        }
+        return URL(fileURLWithPath: "/Applications/Riff.app")
     }
 
     private static func isRelaunching(_ dir: URL) -> Bool {

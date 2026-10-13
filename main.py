@@ -31,6 +31,7 @@ from utils.provider_status import ProviderStatus
 from ui.tray import SystemTray
 from ui.hud import RecordingHUD
 from utils.permissions import PermissionManager
+from utils.updater import AppUpdater
 
 # Phase 2: Authentication
 try:
@@ -576,6 +577,7 @@ class RiffApp:
             on_stop=self.stop_recording_manual,
             on_force_reset=self.force_reset_state,
             on_reveal_logs=open_logs_folder,
+            on_update=self.install_update,
             permission_manager=self.permission_manager
         )
         self.hud = RecordingHUD(os.path.dirname(self.config.config_path))
@@ -841,6 +843,8 @@ class RiffApp:
         threading.Thread(target=self.monitor_config, daemon=True).start()
         threading.Thread(target=self.health_monitor, daemon=True).start()
         threading.Thread(target=self._drain_retry_queue, daemon=True, name="riff-retry").start()
+        self.updater = AppUpdater(os.path.dirname(self.config.config_path))
+        threading.Thread(target=self._update_loop, daemon=True, name="riff-update").start()
         if self.auth_manager and self.auth_manager.is_authenticated:
             threading.Thread(target=self._startup_cloud_sync, daemon=True, name="riff-cloud-sync").start()
 
@@ -912,6 +916,38 @@ class RiffApp:
         self.permission_manager.write_status()
         if kind in ("accessibility", "input_monitoring"):
             self._schedule_tray_relaunch(kind)
+
+    def install_update(self):
+        updater = getattr(self, "updater", None)
+        if updater:
+            updater.install(self.quit_from_tray)
+
+    def _update_loop(self):
+        updater = self.updater
+        next_check = 0
+        announced = None
+        while self.running:
+            try:
+                if time.time() >= next_check:
+                    info = updater.check()
+                    latest = info.get("latest")
+                    if info.get("available") and latest:
+                        self.tray.set_update_available(latest)
+                        if announced != latest:
+                            announced = latest
+                            self.tray.show_notification(
+                                "Riff update",
+                                f"Version {latest} is ready. Open Home and click Update.",
+                            )
+                    else:
+                        self.tray.set_update_available(None)
+                    next_check = time.time() + 6 * 60 * 60
+                if updater.consume_request():
+                    updater.install(self.quit_from_tray)
+                    return
+            except Exception as exc:
+                logging.warning("[Update] Loop error: %s", exc)
+            time.sleep(1)
 
     def _warmup_audio(self):
         """Import PortAudio at launch so the first recording is not delayed ~3s."""

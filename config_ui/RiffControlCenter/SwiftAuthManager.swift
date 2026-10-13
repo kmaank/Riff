@@ -1043,6 +1043,106 @@ class SwiftAuthManager: ObservableObject {
 
         return Data(base64Encoded: base64)
     }
+
+    /// Uploads a redacted log snapshot. Spoken text never leaves the device.
+    func sendSupportLogs() async throws {
+        guard isAuthenticated, let token = currentAccessToken(), !token.isEmpty else {
+            throw SupportLogError.notSignedIn
+        }
+        let uid = userId.isEmpty ? (decodeJWT(token: token)?["sub"] as? String ?? "") : userId
+        guard !uid.isEmpty else { throw SupportLogError.notSignedIn }
+
+        let body = SupportLogRedactor.snapshot(email: userEmail)
+        guard let url = URL(string: "\(supabaseUrl)/rest/v1/support_logs") else {
+            throw SupportLogError.failed("Bad Supabase URL")
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("return=minimal", forHTTPHeaderField: "Prefer")
+        let payload: [String: String] = [
+            "user_id": uid,
+            "email": userEmail,
+            "app_version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown",
+            "macos": ProcessInfo.processInfo.operatingSystemVersionString,
+            "body": body
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200...299).contains(status) else {
+            let detail = String(data: data, encoding: .utf8) ?? ""
+            AuthLogger.log("sendSupportLogs failed status=\(status) \(detail.prefix(180))")
+            throw SupportLogError.failed("Could not send logs (\(status))")
+        }
+        AuthLogger.log("sendSupportLogs ok bytes=\(body.utf8.count)")
+    }
+}
+
+enum SupportLogError: LocalizedError {
+    case notSignedIn
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .notSignedIn: return "Sign in on the Account tab, then send logs."
+        case .failed(let message): return message
+        }
+    }
+}
+
+enum SupportLogRedactor {
+    static func snapshot(email: String) -> String {
+        let dir = AuthLogger.logDir
+        var parts: [String] = []
+        parts.append("email=\(email)")
+        parts.append(tail(dir.appendingPathComponent("diagnostics.txt"), maxBytes: 8_000))
+        parts.append("--- riff.log ---")
+        parts.append(redact(tail(dir.appendingPathComponent("riff.log"), maxBytes: 80_000)))
+        parts.append("--- activity.log ---")
+        parts.append(redact(tail(dir.appendingPathComponent("activity.log"), maxBytes: 20_000)))
+        parts.append("--- debug_auth.log ---")
+        parts.append(redact(tail(dir.appendingPathComponent("debug_auth.log"), maxBytes: 40_000)))
+        let joined = parts.joined(separator: "\n")
+        if joined.utf8.count <= 140_000 { return joined }
+        let end = joined.index(joined.endIndex, offsetBy: -120_000, limitedBy: joined.startIndex) ?? joined.startIndex
+        return String(joined[end...])
+    }
+
+    private static func tail(_ url: URL, maxBytes: Int) -> String {
+        guard let data = try? Data(contentsOf: url), !data.isEmpty else { return "(missing \(url.lastPathComponent))" }
+        let slice = data.count > maxBytes ? data.suffix(maxBytes) : data
+        return String(data: slice, encoding: .utf8) ?? "(unreadable \(url.lastPathComponent))"
+    }
+
+    static func redact(_ text: String) -> String {
+        var lines: [String] = []
+        let contentMarkers = [
+            "Whisper Raw Output:",
+            "Ensuring full English translation:",
+            "Translated:",
+            "Raw transcription:",
+            "Refined text:"
+        ]
+        for line in text.components(separatedBy: "\n") {
+            var out = line
+            for marker in contentMarkers {
+                guard let range = out.range(of: marker) else { continue }
+                let after = String(out[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+                if after.range(of: #"^\d+\s+chars?\.?$"#, options: .regularExpression) != nil {
+                    continue
+                }
+                out = String(out[..<range.upperBound]) + " [transcript removed]"
+                break
+            }
+            out = out.replacingOccurrences(of: #"gsk_[A-Za-z0-9]+"#, with: "gsk_REDACTED", options: .regularExpression)
+            out = out.replacingOccurrences(of: #"eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+"#, with: "JWT_REDACTED", options: .regularExpression)
+            lines.append(out)
+        }
+        return lines.joined(separator: "\n")
+    }
 }
 
 // MARK: - Data Models

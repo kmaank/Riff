@@ -10,7 +10,7 @@ from pystray import Icon, Menu, MenuItem
 from utils.permissions import PermissionManager
 
 class SystemTray:
-    def __init__(self, on_settings, on_quit, on_instructions=None, on_record=None, on_stop=None, on_force_reset=None, on_reveal_logs=None, permission_manager=None):
+    def __init__(self, on_settings, on_quit, on_instructions=None, on_record=None, on_stop=None, on_force_reset=None, on_reveal_logs=None, on_update=None, permission_manager=None):
         self.on_settings = on_settings
         self.on_quit = on_quit
         self.on_instructions = on_instructions
@@ -18,7 +18,9 @@ class SystemTray:
         self.on_stop = on_stop
         self.on_force_reset = on_force_reset
         self.on_reveal_logs = on_reveal_logs
+        self.on_update = on_update
         self.permission_manager = permission_manager or PermissionManager()
+        self.update_label = None
         self.icon = None
         self.icons = self._create_icons()
         self.current_state = "idle"
@@ -60,10 +62,14 @@ class SystemTray:
         )
 
     def _create_menu(self):
-        return pystray.Menu(
+        items = [
             pystray.MenuItem("Riff", None, enabled=False),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Open Home", self._on_settings_click, default=True),
+        ]
+        if self.update_label:
+            items.append(pystray.MenuItem(self.update_label, self._on_update_click))
+        items.extend([
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Start Recording", self._on_record_click, enabled=lambda item: self.current_state == "idle"),
             pystray.MenuItem("Stop Recording", self._on_stop_click, enabled=lambda item: self.current_state == "recording"),
@@ -71,7 +77,8 @@ class SystemTray:
             pystray.MenuItem("Advanced", self._create_advanced_menu()),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit", self._quit)
-        )
+        ])
+        return pystray.Menu(*items)
 
     def _on_instructions_click(self, icon, item):
         logging.info("Tray: How to clicked")
@@ -101,6 +108,18 @@ class SystemTray:
         logging.info("Tray: Reveal Logs clicked")
         if self.on_reveal_logs:
             threading.Thread(target=self.on_reveal_logs, daemon=True).start()
+
+    def set_update_available(self, version):
+        label = f"Update to {version}" if version else None
+        if label == self.update_label:
+            return
+        self.update_label = label
+        self.update_menu()
+
+    def _on_update_click(self, icon, item):
+        logging.info("Tray: Update clicked")
+        if self.on_update:
+            threading.Thread(target=self.on_update, daemon=True).start()
 
     def _on_settings_click(self, icon, item):
         logging.info("Tray: Settings clicked")

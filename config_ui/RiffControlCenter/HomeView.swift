@@ -9,10 +9,41 @@ struct HomeView: View {
     var onOpenHistory: () -> Void = {}
 
     private var keycap: String { RiffHotkey.keycap(settings.config.hotkey.combination) }
+    @State private var sendingLogs = false
+    @State private var logStatus = ""
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
+                if runtime.updateAvailable {
+                    HStack(alignment: .center, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Riff \(runtime.updateLatest) is available")
+                                .font(RiffType.sans(14, weight: .semibold))
+                                .foregroundColor(RiffTheme.ink)
+                            Text(runtime.updateState == "downloading" || runtime.updateState == "installing"
+                                 ? runtime.updateMessage
+                                 : "Download the latest signed release from GitHub. Riff reopens when it is installed.")
+                                .font(RiffType.bodySM)
+                                .foregroundColor(RiffTheme.inkMuted)
+                        }
+                        Spacer(minLength: 8)
+                        RiffButton(
+                            title: runtime.updateState == "downloading" || runtime.updateState == "installing" ? "Updating…" : "Update",
+                            kind: .primary,
+                            enabled: runtime.updateState != "downloading" && runtime.updateState != "installing",
+                            action: { runtime.requestUpdate() }
+                        )
+                    }
+                    .padding(12)
+                    .background(RiffTheme.amberWash)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: RiffTheme.radiusSM)
+                            .stroke(RiffTheme.line, lineWidth: 1)
+                    )
+                    .cornerRadius(RiffTheme.radiusSM)
+                }
+
                 if runtime.applyingPermissions {
                     RiffBanner(
                         title: "Riff is applying permissions",
@@ -22,10 +53,10 @@ struct HomeView: View {
                     )
                 } else if runtime.reporterStale {
                     RiffBanner(
-                        title: "Riff is not reporting",
-                        detail: "Open the menu-bar Riff app. This window cannot see Microphone or the hotkey until that process is running.",
-                        actionTitle: "Fix permissions",
-                        action: onOpenPermissions
+                        title: runtime.startingMenuBar ? "Starting Riff" : "Riff is not reporting",
+                        detail: "The menu-bar app stopped. Riff is starting it so the hotkey and microphone work again.",
+                        actionTitle: "Start Riff",
+                        action: { runtime.ensureMenuBarApp() }
                     )
                 } else if runtime.permissionBannerVisible {
                     RiffBanner(
@@ -100,6 +131,21 @@ struct HomeView: View {
                 Text("Riff stays in the menu bar. Click the icon to open this window — there is no Dock icon.")
                     .font(RiffType.caption)
                     .foregroundColor(RiffTheme.inkFaint)
+                HStack(spacing: 10) {
+                    RiffButton(
+                        title: sendingLogs ? "Sending…" : "Send logs",
+                        icon: "paperplane",
+                        kind: .secondary,
+                        enabled: !sendingLogs,
+                        action: { Task { await sendLogs() } }
+                    )
+                    if !logStatus.isEmpty {
+                        Text(logStatus)
+                            .font(RiffType.caption)
+                            .foregroundColor(RiffTheme.inkMuted)
+                            .lineLimit(2)
+                    }
+                }
             }
             Spacer()
             Image(systemName: "mic")
@@ -211,6 +257,18 @@ struct HomeView: View {
                 )
                 .cornerRadius(RiffTheme.radiusSM)
             }
+        }
+    }
+
+    private func sendLogs() async {
+        sendingLogs = true
+        logStatus = ""
+        defer { sendingLogs = false }
+        do {
+            try await authManager.sendSupportLogs()
+            logStatus = "Sent. Spoken words were removed first."
+        } catch {
+            logStatus = error.localizedDescription
         }
     }
 }
