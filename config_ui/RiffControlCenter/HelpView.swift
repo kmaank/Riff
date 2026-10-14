@@ -27,7 +27,7 @@ struct HelpView: View {
                     tip("2. Release", "Casual pastes what Whisper heard. Clean, Formal, and Riff take a moment to rewrite.")
                     tip("3. Riff pastes", "The words land in the text field you clicked. If nothing is selected, click a field first.")
                     tip("Latch", "Hold Shift with your key to lock recording. Press the key again when you're done.")
-                    tip("Open Home", "Riff has no Dock icon. Click the Riff icon in the menu bar, then Open Home.")
+                    tip("Open Home", "Click the Riff icon in the menu bar, then Open Home. Only one Riff window opens.")
                 }
             }
             .padding(RiffTheme.space6)

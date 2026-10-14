@@ -578,6 +578,7 @@ class RiffApp:
             on_force_reset=self.force_reset_state,
             on_reveal_logs=open_logs_folder,
             on_update=self.install_update,
+            on_check_updates=self.request_update_check,
             permission_manager=self.permission_manager
         )
         self.hud = RecordingHUD(os.path.dirname(self.config.config_path))
@@ -630,6 +631,7 @@ class RiffApp:
             self.current_hotkey_str = "ctrl_l"
              
         self.is_latched = False
+        self.hotkey_is_down = False
         self.processing_start_time = 0
         self.recording_started_at = 0
         self.watchdog_timeout = 45.0
@@ -922,14 +924,25 @@ class RiffApp:
         if updater:
             updater.install(self.quit_from_tray)
 
+    def request_update_check(self):
+        updater = getattr(self, "updater", None)
+        if not updater:
+            return
+        try:
+            with open(updater.check_path, "w") as handle:
+                handle.write(str(time.time()))
+        except OSError:
+            logging.warning("[Update] Could not request a manual check", exc_info=True)
+
     def _update_loop(self):
         updater = self.updater
         next_check = 0
         announced = None
         while self.running:
             try:
-                if time.time() >= next_check:
-                    info = updater.check()
+                asked_at = updater.consume_check()
+                if asked_at or time.time() >= next_check:
+                    info = updater.check(manual=bool(asked_at), requested_at=asked_at)
                     latest = info.get("latest")
                     if info.get("available") and latest:
                         self.tray.set_update_available(latest)
@@ -937,11 +950,17 @@ class RiffApp:
                             announced = latest
                             self.tray.show_notification(
                                 "Riff update",
-                                f"Version {latest} is ready. Open Home and click Update.",
+                                f"Version {latest} is ready. Click Install to update.",
                             )
                     else:
                         self.tray.set_update_available(None)
-                    next_check = time.time() + 6 * 60 * 60
+                        if asked_at:
+                            self.tray.show_notification(
+                                "Riff",
+                                info.get("message") or "You're on the latest version.",
+                            )
+                    if not asked_at:
+                        next_check = time.time() + 6 * 60 * 60
                 if updater.consume_request():
                     updater.install(self.quit_from_tray)
                     return
@@ -1155,6 +1174,7 @@ class RiffApp:
 
         # 3. Standard Trigger - Start Recording
         if key == trigger:
+            self.hotkey_is_down = True
             logging.info("Hotkey Trigger Detected")
 
             # STATE VALIDATION: Run health check before starting
@@ -1173,17 +1193,26 @@ class RiffApp:
             # Start if the mic is free. A finishing paste must not block the next hold.
             if not self.recorder.recording:
                 try:
-                    self.tray.set_state("recording")
                     self.recording_started_at = time.time()
                     self.recorder.start_recording()  # No VAD callback - manual stop only
+                    if not self.hotkey_is_down and not self.is_latched:
+                        logging.info("[Hotkey] Released while the microphone was opening")
+                        self._stop_and_process()
+                        return
+                    self.tray.set_state("recording")
                     self._show_recording_hud()
                     logging.info("Recording started")
                     log_activity("Recording Started")
                 except AudioRecorderError as e:
                     logging.error(f"Failed to start recording: {e}")
-                    self.tray.show_notification("Error", f"Mic error: {e}")
                     self.tray.set_state("idle")
                     self.hud.hide()
+                    message = str(e)
+                    if "did not open" in message or "still closing" in message:
+                        self.tray.show_notification("Riff", "The microphone got stuck. Riff is restarting.")
+                        self._schedule_tray_relaunch("mic-stuck")
+                    else:
+                        self.tray.show_notification("Error", f"Mic error: {e}")
                 except Exception as e:
                     logging.error(f"Unexpected error starting recording: {e}", exc_info=True)
                     self.tray.show_notification("Error", "Could not access microphone.")
@@ -1197,6 +1226,7 @@ class RiffApp:
             return
             
         if key == trigger:
+            self.hotkey_is_down = False
             # If latched, ignore release (don't stop)
             if self.is_latched:
                 return
@@ -1542,11 +1572,8 @@ class RiffApp:
                 except OSError as e:
                     logging.warning("[Settings] Could not chmod Control Center (continuing): %s", e)
 
-            # Reuse an existing Home window when possible; -n only if none running.
-            open_cmd = ["open", "-a", app_path]
-            if not self._is_control_center_running():
-                open_cmd = ["open", "-n", "-a", app_path]
-            subprocess.Popen(open_cmd)
+            # Never use open -n. A second instance becomes another Dock icon.
+            subprocess.Popen(["open", "-a", app_path])
             threading.Thread(
                 target=self._activate_control_center,
                 args=(app_path,),
@@ -1575,14 +1602,6 @@ class RiffApp:
                             'tell application "System Events" to set frontmost of '
                             'first process whose name is "RiffControlCenter" to true',
                         ],
-                        capture_output=True,
-                        check=False,
-                    )
-                except OSError:
-                    pass
-                try:
-                    subprocess.run(
-                        ["open", "-a", app_path],
                         capture_output=True,
                         check=False,
                     )
@@ -1730,7 +1749,7 @@ def launch_settings_app(config, app_instance=None):
                     os.chmod(binary_path, os.stat(binary_path).st_mode | stat.S_IEXEC)
                 except OSError as e:
                     logging.warning("[Settings] chmod failed (continuing): %s", e)
-            subprocess.Popen(["open", "-n", "-a", app_path])
+            subprocess.Popen(["open", "-a", app_path])
             # Activate without a RiffApp instance yet.
             def _activate():
                 for i in range(8):

@@ -72,6 +72,11 @@ if [ -d "../assets/logos" ]; then
     cp ../assets/logos/*.png "$OUTPUT_APP/Contents/Resources/" 2>/dev/null || true
 fi
 
+# Setup walkthrough shown during onboarding
+if [ -f "../assets/Onboarding.mp4" ]; then
+    cp "../assets/Onboarding.mp4" "$OUTPUT_APP/Contents/Resources/Onboarding.mp4"
+fi
+
 # IBM Plex fonts
 if [ -d "../assets/fonts" ]; then
     cp ../assets/fonts/*.ttf "$OUTPUT_APP/Contents/Resources/" 2>/dev/null || true

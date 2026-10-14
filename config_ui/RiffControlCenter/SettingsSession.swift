@@ -198,23 +198,37 @@ enum SettingsSession {
 
 final class RiffAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let others = NSWorkspace.shared.runningApplications.filter {
+            $0.bundleIdentifier == Bundle.main.bundleIdentifier
+                && $0.processIdentifier != ProcessInfo.processInfo.processIdentifier
+        }
+        if let existing = others.first {
+            existing.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+            NSApp.terminate(nil)
+            return
+        }
         // Always take focus so first launch is never an invisible background window.
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         DispatchQueue.main.async {
-            for window in NSApp.windows {
-                window.makeKeyAndOrderFront(nil)
-            }
+            Self.keepOneWindow()
             NSApp.activate(ignoringOtherApps: true)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-            for window in NSApp.windows {
-                window.makeKeyAndOrderFront(nil)
-            }
+            Self.keepOneWindow()
             NSApp.activate(ignoringOtherApps: true)
         }
         let saved = SettingsSession.load()
         SettingsSession.update(resume: saved?.resume ?? false)
+    }
+
+    private static func keepOneWindow() {
+        let titled = NSApp.windows.filter { $0.styleMask.contains(.titled) && $0.level == .normal }
+        guard let keeper = titled.first else { return }
+        keeper.makeKeyAndOrderFront(nil)
+        for window in titled.dropFirst() {
+            window.close()
+        }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

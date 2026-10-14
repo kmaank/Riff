@@ -85,8 +85,8 @@ app = BUNDLE(
         'LSMinimumSystemVersion': '12.0',
         'CFBundleName': 'Riff',
         'CFBundleDisplayName': 'Riff',
-        'CFBundleShortVersionString': '1.2.10',
-        'CFBundleVersion': '1.2.10',
+        'CFBundleShortVersionString': '1.2.11',
+        'CFBundleVersion': '1.2.11',
         'CFBundleURLTypes': [{
             'CFBundleURLName': 'com.riff.app.auth',
             'CFBundleURLSchemes': ['riff'],

@@ -9,8 +9,6 @@ struct HomeView: View {
     var onOpenHistory: () -> Void = {}
 
     private var keycap: String { RiffHotkey.keycap(settings.config.hotkey.combination) }
-    @State private var sendingLogs = false
-    @State private var logStatus = ""
 
     var body: some View {
         ScrollView {
@@ -23,13 +21,13 @@ struct HomeView: View {
                                 .foregroundColor(RiffTheme.ink)
                             Text(runtime.updateState == "downloading" || runtime.updateState == "installing"
                                  ? runtime.updateMessage
-                                 : "Download the latest signed release from GitHub. Riff reopens when it is installed.")
+                                 : "Install replaces this copy and reopens Riff.")
                                 .font(RiffType.bodySM)
                                 .foregroundColor(RiffTheme.inkMuted)
                         }
                         Spacer(minLength: 8)
                         RiffButton(
-                            title: runtime.updateState == "downloading" || runtime.updateState == "installing" ? "Updating…" : "Update",
+                            title: runtime.updateState == "downloading" || runtime.updateState == "installing" ? "Installing…" : "Install",
                             kind: .primary,
                             enabled: runtime.updateState != "downloading" && runtime.updateState != "installing",
                             action: { runtime.requestUpdate() }
@@ -128,19 +126,21 @@ struct HomeView: View {
                 Text("Text types into the window you are in. Hold Shift + \(keycap) to lock recording on.")
                     .font(RiffType.bodySM)
                     .foregroundColor(RiffTheme.inkMuted)
-                Text("Riff stays in the menu bar. Click the icon to open this window — there is no Dock icon.")
+                Text("Close this window and Riff stays in the menu bar. Click that icon to open Home again.")
                     .font(RiffType.caption)
                     .foregroundColor(RiffTheme.inkFaint)
                 HStack(spacing: 10) {
                     RiffButton(
-                        title: sendingLogs ? "Sending…" : "Send logs",
-                        icon: "paperplane",
+                        title: runtime.updateState == "checking" ? "Checking…" : "Check for updates",
+                        icon: "arrow.triangle.2.circlepath",
                         kind: .secondary,
-                        enabled: !sendingLogs,
-                        action: { Task { await sendLogs() } }
+                        enabled: runtime.updateState != "checking"
+                            && runtime.updateState != "downloading"
+                            && runtime.updateState != "installing",
+                        action: { runtime.requestUpdateCheck() }
                     )
-                    if !logStatus.isEmpty {
-                        Text(logStatus)
+                    if !updateCheckLine.isEmpty {
+                        Text(updateCheckLine)
                             .font(RiffType.caption)
                             .foregroundColor(RiffTheme.inkMuted)
                             .lineLimit(2)
@@ -260,15 +260,11 @@ struct HomeView: View {
         }
     }
 
-    private func sendLogs() async {
-        sendingLogs = true
-        logStatus = ""
-        defer { sendingLogs = false }
-        do {
-            try await authManager.sendSupportLogs()
-            logStatus = "Sent. Spoken words were removed first."
-        } catch {
-            logStatus = error.localizedDescription
-        }
+    private var updateCheckLine: String {
+        if runtime.updateAvailable { return "" }
+        if runtime.updateState == "checking" { return "Checking GitHub…" }
+        if runtime.updateManual { return runtime.updateMessage }
+        return ""
     }
+
 }

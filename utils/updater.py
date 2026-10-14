@@ -15,6 +15,7 @@ REPO = "kmaank/Riff"
 API_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 STATUS_NAME = "update_status.json"
 REQUEST_NAME = "update_install.request"
+CHECK_NAME = "update_check.request"
 
 
 def version_tuple(value):
@@ -58,10 +59,13 @@ class AppUpdater:
         self.support_dir = support_dir
         self.status_path = os.path.join(support_dir, STATUS_NAME)
         self.request_path = os.path.join(support_dir, REQUEST_NAME)
+        self.check_path = os.path.join(support_dir, CHECK_NAME)
         self._installing = False
         self.latest = None
 
-    def check(self):
+    def check(self, manual=False, requested_at=None):
+        if self._installing and self.latest:
+            return self.latest
         current = current_version()
         payload = {
             "current": current,
@@ -71,6 +75,8 @@ class AppUpdater:
             "message": "",
             "download_url": "",
             "checked_at": time.time(),
+            "manual": bool(manual),
+            "requested_at": requested_at or 0,
         }
         try:
             request = urllib.request.Request(
@@ -96,14 +102,34 @@ class AppUpdater:
                 self.latest = payload
                 logging.info("[Update] %s -> %s", current, latest)
             else:
+                if manual:
+                    if version_tuple(latest) == version_tuple(current):
+                        payload["message"] = f"You're on {current}, the latest version."
+                    else:
+                        payload["message"] = f"You're on {current}. No newer release is available."
                 logging.info("[Update] Up to date (%s)", current)
         except Exception as exc:
             payload["state"] = "error"
-            payload["message"] = "Could not check for updates."
+            payload["message"] = "Could not check for updates. Try again in a moment."
             logging.warning("[Update] Check failed: %s", exc)
         self._write(payload)
         self.latest = payload
         return payload
+
+    def consume_check(self):
+        """Return the timestamp Home or the menu wrote, or None if nobody asked."""
+        if self._installing or not os.path.exists(self.check_path):
+            return None
+        try:
+            with open(self.check_path, "r") as handle:
+                raw = handle.read().strip()
+            os.remove(self.check_path)
+        except OSError:
+            return None
+        try:
+            return float(raw)
+        except ValueError:
+            return time.time()
 
     def consume_request(self):
         if self._installing or not os.path.exists(self.request_path):

@@ -1,4 +1,5 @@
 import SwiftUI
+import AVKit
 
 struct OnboardingView: View {
     @EnvironmentObject var settings: SettingsManager
@@ -19,6 +20,7 @@ struct OnboardingView: View {
     @State private var hudStatus = HudStatus()
     @FocusState private var groqFieldFocused: Bool
     @FocusState private var driveFocused: Bool
+    @State private var showSetupVideo = false
 
     private let permissionBeats: [(id: String, title: String, why: String)] = [
         ("microphone", "Microphone", "So I can hear you."),
@@ -51,6 +53,9 @@ struct OnboardingView: View {
         .padding(RiffTheme.space5)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(RiffTheme.surface000)
+        .sheet(isPresented: $showSetupVideo) {
+            OnboardingVideoView()
+        }
         .onAppear {
             AuthLogger.log("[Onboarding] appear step=\(step) authenticated=\(authManager.isAuthenticated) onboardingDone=\(settings.config.onboarding_completed ?? false) hasKey=\(settings.config.api.api_key.hasPrefix("gsk_"))")
             restoreOrAdvance()
@@ -103,7 +108,7 @@ struct OnboardingView: View {
                 .multilineTextAlignment(.center)
                 .foregroundColor(RiffTheme.inkMuted)
                 .frame(maxWidth: 520)
-            Text("Riff lives in the menu bar after this — not the Dock. Click the Riff icon anytime to open Home.")
+            Text("You only get one Riff window. After setup, open it again from the menu bar at the top-right.")
                 .font(RiffType.bodySM)
                 .multilineTextAlignment(.center)
                 .foregroundColor(RiffTheme.inkFaint)
@@ -112,10 +117,13 @@ struct OnboardingView: View {
                 .font(RiffType.caption)
                 .foregroundColor(RiffTheme.inkFaint)
             Spacer()
-            RiffButton(title: "I'm ready", kind: .primary, action: {
-                AuthLogger.log("[Onboarding] I'm ready tapped")
-                withAnimation { step = 2 }
-            })
+            HStack(spacing: 10) {
+                RiffButton(title: "Watch setup", icon: "play.fill", kind: .secondary, action: { showSetupVideo = true })
+                RiffButton(title: "I'm ready", kind: .primary, action: {
+                    AuthLogger.log("[Onboarding] I'm ready tapped")
+                    withAnimation { step = 2 }
+                })
+            }
             .padding(.bottom, 8)
         }
         .padding()
@@ -377,6 +385,7 @@ struct OnboardingView: View {
                         .foregroundColor(RiffTheme.inkMuted)
                         .multilineTextAlignment(.center)
                 }
+                RiffButton(title: "Watch setup", icon: "play.fill", kind: .secondary, action: { showSetupVideo = true })
                 RiffButton(
                     title: granted ? "Continue" : "Allow \(beat.title)",
                     kind: .primary,
@@ -489,7 +498,7 @@ struct OnboardingView: View {
             .padding(.horizontal, 24)
 
             if testDriveSucceeded {
-                Text("I'll live in the menu bar at the top-right. There is no Dock icon. Click that Riff icon to open Home again — hold the same key in Mail, Slack, anywhere.")
+                Text("After this, Riff lives in the menu bar at the top-right. Click that icon to open Home again — hold the same key in Mail, Slack, anywhere.")
                     .font(RiffType.bodySM)
                     .foregroundColor(RiffTheme.inkMuted)
                     .multilineTextAlignment(.center)
@@ -683,6 +692,49 @@ struct OnboardingView: View {
             return
         }
         hudStatus = decoded
+    }
+}
+
+struct OnboardingVideoView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var player: AVPlayer?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("How setup works")
+                    .font(RiffType.h2)
+                    .foregroundColor(RiffTheme.ink)
+                Spacer()
+                RiffButton(title: "Close", kind: .ghost, action: {
+                    player?.pause()
+                    dismiss()
+                })
+            }
+            if let player {
+                VideoPlayer(player: player)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .cornerRadius(RiffTheme.radiusSM)
+            } else {
+                Text("The setup video is not in this copy of Riff.")
+                    .font(RiffType.body)
+                    .foregroundColor(RiffTheme.inkMuted)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 760, minHeight: 520)
+        .background(RiffTheme.surface000)
+        .onAppear {
+            guard player == nil,
+                  let url = Bundle.main.url(forResource: "Onboarding", withExtension: "mp4") else { return }
+            let next = AVPlayer(url: url)
+            player = next
+            next.play()
+        }
+        .onDisappear {
+            player?.pause()
+        }
     }
 }
 

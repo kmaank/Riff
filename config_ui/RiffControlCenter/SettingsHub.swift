@@ -37,8 +37,58 @@ struct SettingsHub: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            SendLogsRow()
+                .padding(.horizontal, RiffTheme.space6)
+                .padding(.vertical, RiffTheme.space4)
+                .background(RiffTheme.surface100)
+                .overlay(alignment: .top) {
+                    Rectangle().fill(RiffTheme.line).frame(height: 1)
+                }
         }
         .background(RiffTheme.surface000)
+    }
+}
+
+private struct SendLogsRow: View {
+    @EnvironmentObject var authManager: SwiftAuthManager
+    @State private var sending = false
+    @State private var status = ""
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Support logs")
+                    .font(RiffType.sans(14, weight: .semibold))
+                    .foregroundColor(RiffTheme.ink)
+                Text(status.isEmpty
+                     ? "Spoken words are removed before anything leaves this Mac."
+                     : status)
+                    .font(RiffType.bodySM)
+                    .foregroundColor(RiffTheme.inkMuted)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 8)
+            RiffButton(
+                title: sending ? "Sending…" : "Send logs",
+                icon: "paperplane",
+                kind: .secondary,
+                enabled: !sending,
+                action: { Task { await send() } }
+            )
+        }
+    }
+
+    private func send() async {
+        sending = true
+        status = ""
+        defer { sending = false }
+        do {
+            try await authManager.sendSupportLogs()
+            status = "Sent. Spoken words were removed first."
+        } catch {
+            status = error.localizedDescription
+        }
     }
 }
 

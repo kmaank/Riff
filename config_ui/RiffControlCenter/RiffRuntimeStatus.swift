@@ -11,11 +11,14 @@ final class RiffRuntimeStatus: ObservableObject {
     @Published var startingMenuBar = false
     @Published var updateAvailable = false
     @Published var updateLatest = ""
+    @Published var updateCurrent = ""
     @Published var updateState = "idle"
     @Published var updateMessage = ""
+    @Published var updateManual = false
 
     private var timer: Timer?
     private var lastLaunchAttempt = Date.distantPast
+    private var pendingCheckAt: Double?
 
     init() {
         refresh()
@@ -99,18 +102,43 @@ final class RiffRuntimeStatus: ObservableObject {
            decoded.state != hud.state {
             DispatchQueue.main.async { self.hud = decoded }
         }
+        var ignoreStatusBefore: Double = 0
+        if let pending = pendingCheckAt, Date().timeIntervalSince1970 - pending > 25 {
+            ignoreStatusBefore = pending
+            pendingCheckAt = nil
+            DispatchQueue.main.async {
+                self.updateState = "error"
+                self.updateMessage = "Could not check for updates. Try again in a moment."
+                self.updateManual = true
+            }
+        }
         if let data = try? Data(contentsOf: dir.appendingPathComponent("update_status.json")),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            let available = (obj["available"] as? Bool) == true
-            let latest = obj["latest"] as? String ?? ""
-            let state = obj["state"] as? String ?? "idle"
-            let message = obj["message"] as? String ?? ""
-            if available != updateAvailable || latest != updateLatest || state != updateState || message != updateMessage {
-                DispatchQueue.main.async {
-                    self.updateAvailable = available
-                    self.updateLatest = latest
-                    self.updateState = state
-                    self.updateMessage = message
+            let requested = obj["requested_at"] as? Double ?? 0
+            if ignoreStatusBefore > 0 && requested < ignoreStatusBefore {
+                // Timed out. Leave the error on screen instead of the previous result.
+            } else if let pending = pendingCheckAt, requested + 0.05 < pending {
+                // A check was asked for and this file is still the previous result.
+            } else {
+                if pendingCheckAt != nil {
+                    pendingCheckAt = nil
+                }
+                let available = (obj["available"] as? Bool) == true
+                let latest = obj["latest"] as? String ?? ""
+                let current = obj["current"] as? String ?? ""
+                let state = obj["state"] as? String ?? "idle"
+                let message = obj["message"] as? String ?? ""
+                let manual = (obj["manual"] as? Bool) == true
+                if available != updateAvailable || latest != updateLatest || current != updateCurrent
+                    || state != updateState || message != updateMessage || manual != updateManual {
+                    DispatchQueue.main.async {
+                        self.updateAvailable = available
+                        self.updateLatest = latest
+                        self.updateCurrent = current
+                        self.updateState = state
+                        self.updateMessage = message
+                        self.updateManual = manual
+                    }
                 }
             }
         }
@@ -119,6 +147,23 @@ final class RiffRuntimeStatus: ObservableObject {
             if decoded.state != provider.state || decoded.waiting != provider.waiting || decoded.label != provider.label {
                 DispatchQueue.main.async { self.provider = decoded }
             }
+        }
+    }
+
+    func requestUpdateCheck() {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("Riff")
+        let at = Date().timeIntervalSince1970
+        pendingCheckAt = at
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? Data(String(at).utf8).write(to: dir.appendingPathComponent("update_check.request"))
+        DispatchQueue.main.async {
+            self.updateState = "checking"
+            self.updateMessage = "Checking GitHub for a newer Riff…"
+            self.updateManual = true
+        }
+        if reporterStale {
+            ensureMenuBarApp()
         }
     }
 

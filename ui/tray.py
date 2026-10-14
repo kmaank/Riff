@@ -10,7 +10,7 @@ from pystray import Icon, Menu, MenuItem
 from utils.permissions import PermissionManager
 
 class SystemTray:
-    def __init__(self, on_settings, on_quit, on_instructions=None, on_record=None, on_stop=None, on_force_reset=None, on_reveal_logs=None, on_update=None, permission_manager=None):
+    def __init__(self, on_settings, on_quit, on_instructions=None, on_record=None, on_stop=None, on_force_reset=None, on_reveal_logs=None, on_update=None, on_check_updates=None, permission_manager=None):
         self.on_settings = on_settings
         self.on_quit = on_quit
         self.on_instructions = on_instructions
@@ -19,6 +19,7 @@ class SystemTray:
         self.on_force_reset = on_force_reset
         self.on_reveal_logs = on_reveal_logs
         self.on_update = on_update
+        self.on_check_updates = on_check_updates
         self.permission_manager = permission_manager or PermissionManager()
         self.update_label = None
         self.icon = None
@@ -48,12 +49,42 @@ class SystemTray:
         dc.rectangle((0, 0, width, height), fill=color)
         return image
 
+    def _as_menu_bar_template(self, image):
+        """Black ink plus the logo's alpha. macOS tints template images:
+        black on a light menu bar, white on a dark one.
+        """
+        rgba = image.convert("RGBA")
+        ink = Image.new("RGBA", rgba.size, (0, 0, 0, 255))
+        ink.putalpha(rgba.getchannel("A"))
+        return ink
+
     def _create_icons(self):
         return {
-            "idle": self.load_icon("tray_idle.png"),
+            "idle": self._as_menu_bar_template(self.load_icon("tray_idle.png")),
             "recording": self.load_icon("tray_recording.png"),
-            "processing": self.load_icon("tray_processing.png")
+            "processing": self.load_icon("tray_processing.png"),
         }
+
+    def _template_for_state(self, state):
+        # Recording and processing stay colored so the state is obvious.
+        return state == "idle"
+
+    def _install_template_hook(self, icon):
+        original = icon._assert_image
+
+        def _assert_image():
+            original()
+            image = getattr(icon, "_icon_image", None)
+            status = getattr(icon, "_status_item", None)
+            if image is None or status is None:
+                return
+            try:
+                image.setTemplate_(bool(getattr(icon, "_riff_template", False)))
+                status.button().setImage_(image)
+            except Exception:
+                logging.debug("[Tray] Could not mark menu bar icon as a template", exc_info=True)
+
+        icon._assert_image = _assert_image
 
     def _create_advanced_menu(self):
         return pystray.Menu(
@@ -67,6 +98,7 @@ class SystemTray:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Open Home", self._on_settings_click, default=True),
         ]
+        items.append(pystray.MenuItem("Check for Updates", self._on_check_updates_click))
         if self.update_label:
             items.append(pystray.MenuItem(self.update_label, self._on_update_click))
         items.extend([
@@ -109,8 +141,13 @@ class SystemTray:
         if self.on_reveal_logs:
             threading.Thread(target=self.on_reveal_logs, daemon=True).start()
 
+    def _on_check_updates_click(self, icon, item):
+        logging.info("Tray: Check for Updates clicked")
+        if self.on_check_updates:
+            threading.Thread(target=self.on_check_updates, daemon=True).start()
+
     def set_update_available(self, version):
-        label = f"Update to {version}" if version else None
+        label = f"Install {version}" if version else None
         if label == self.update_label:
             return
         self.update_label = label
@@ -138,6 +175,7 @@ class SystemTray:
         if not self.icon or state not in self.icons:
             return
         try:
+            self.icon._riff_template = self._template_for_state(state)
             self.icon.icon = self.icons[state]
         except Exception:
             logging.debug("[Tray] Icon update failed for %s", state, exc_info=True)
@@ -153,6 +191,8 @@ class SystemTray:
             "Riff",
             menu=self._create_menu()
         )
+        self.icon._riff_template = True
+        self._install_template_hook(self.icon)
         self.icon.run()
 
     def run_detached(self):

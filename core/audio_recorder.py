@@ -20,6 +20,7 @@ class AudioRecorder:
         self.audio_queue = queue.Queue()
         self.frames = []
         self.stream = None
+        self._close_thread = None
         self._lock = threading.RLock()  # Re-entrant: stop_recording may call cleanup
         
         # VAD Settings
@@ -106,6 +107,9 @@ class AudioRecorder:
                     logging.error(f"[AudioRecorder] State check: recording={self.recording}, stream={self.stream}, stream.active={self.stream.active if self.stream else 'N/A'}")
                     self._force_cleanup()
             
+            if self._close_thread is not None and self._close_thread.is_alive():
+                raise AudioRecorderError("Microphone is still closing from the last take.")
+
             try:
                 logging.info("[AudioRecorder] Starting stream...")
                 
@@ -129,7 +133,24 @@ class AudioRecorder:
                     channels=self.channels,
                     callback=self.callback
                 )
-                self.stream.start()
+                started = threading.Event()
+                start_error = []
+
+                def _start_stream():
+                    try:
+                        self.stream.start()
+                    except Exception as exc:
+                        start_error.append(exc)
+                    finally:
+                        started.set()
+
+                threading.Thread(target=_start_stream, daemon=True, name="riff-mic-open").start()
+                if not started.wait(3.0):
+                    # CoreAudio is wedged. Leave the open thread behind and relaunch.
+                    self.stream = None
+                    raise AudioRecorderError("Microphone did not open in time.")
+                if start_error:
+                    raise start_error[0]
                 self.recording = True
                 
                 logging.info("[AudioRecorder] Stream started successfully.")
@@ -229,12 +250,12 @@ class AudioRecorder:
             except Exception as e:
                 logging.warning(f"[AudioRecorder] Stream close failed: {e}")
 
-        close_thread = threading.Thread(target=close_stream, daemon=True)
-        close_thread.start()
-        close_thread.join(timeout=timeout)
+        self._close_thread = threading.Thread(target=close_stream, daemon=True, name="riff-mic-close")
+        self._close_thread.start()
+        self._close_thread.join(timeout=timeout)
 
-        if close_thread.is_alive():
-            logging.warning("[AudioRecorder] Stream close still running after %.1fs — continuing", timeout)
+        if self._close_thread.is_alive():
+            logging.error("[AudioRecorder] Stream close still running after %.1fs — microphone is stuck", timeout)
             return False
 
         logging.info("[AudioRecorder] Stream closed.")

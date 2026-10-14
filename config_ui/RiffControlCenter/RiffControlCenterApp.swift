@@ -44,6 +44,9 @@ struct RiffControlCenterApp: App {
                     }
                 }
         }
+        .commands {
+            CommandGroup(replacing: .newItem) { }
+        }
     }
 
     private func fitRiffWindows() {
